@@ -2,7 +2,7 @@
 
 ## Overview
 
-This Dockerized Go application generates an Nginx `blocklist.conf` file from dynamic emerging threat lists.
+This Dockerized Go application generates an Nginx `blocklist.conf` file from dynamic emerging threat lists daily.
 
 ## Prerequisites
 
