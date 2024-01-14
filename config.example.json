@@ -1,0 +1,7 @@
+{
+    "block_lists": [
+        "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt",
+        "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
+    ],
+    "nginx_conf_file_path": "/app/nginx/conf/blocklist.conf"
+}

@@ -1,0 +1,14 @@
+version: '3'
+
+services:
+  anubis:
+    image: madebymode/anubis
+    build: .
+    volumes:
+      # our config.json
+      - ./config.json:/app/config.json:ro
+      # named volume for saving rules
+      - nginx-rules:/app/nginx/conf/
+
+volumes:
+  nginx-rules:

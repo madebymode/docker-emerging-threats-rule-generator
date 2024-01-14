@@ -1,0 +1,4 @@
+#!/bin/sh
+
+
+su-exec anubis /app/nginx_blacklist
