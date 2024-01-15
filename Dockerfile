@@ -52,5 +52,6 @@ RUN chown -R anubis:rites /app
 # Set the entrypoint
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-# Start the cron daemon
-CMD ["crond", "-f", "-l", "8"]
+# update our list on container start then run cron daemon to update once daily
+CMD /app/nginx_blacklist && crond -f -l 8
+

@@ -14,6 +14,7 @@ import (
 type Config struct {
 	BlockLists   []string `json:"block_lists"`
 	ConfFilePath string   `json:"nginx_conf_file_path"`
+	Webhooks     []string `json:"restart_nginx_webhooks"`
 }
 
 func readConfig(filePath string) (*Config, error) {
@@ -92,6 +93,29 @@ func writeBlocklistFile(addresses map[string]struct{}, filePath string) error {
 	return writer.Flush()
 }
 
+func triggerWebhook(webhookURL string) error {
+	resp, err := http.Post(webhookURL, "application/json", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to trigger webhook: status code %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func triggerWebhooks(webhooks []string) error {
+	for _, webhook := range webhooks {
+		if err := triggerWebhook(webhook); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func main() {
 	config, err := readConfig("config.json")
 	if err != nil {
@@ -120,5 +144,11 @@ func main() {
 		return
 	}
 
-	fmt.Println("blocklist.conf file created successfully.")
+	// Trigger Portainer webhooks to restart containers
+	if err := triggerWebhooks(config.Webhooks); err != nil {
+		fmt.Printf("Failed to trigger webhooks: %v\n", err)
+		return
+	}
+
+	fmt.Println("blocklist.conf file created and containers scheduled for restart.")
 }
