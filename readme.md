@@ -1,4 +1,4 @@
-# Dynamic Threat Blocklist Generator with Docker
+# Emerging Threat Rules for Nginx
 
 ## Overview
 
