@@ -1,19 +1,18 @@
 version: '3'
 
 services:
-  anubis:
-    image: madebymode/anubis
+  emerging-threats-rules:
+    image: mxmd/etr:nginx
     build: .
     volumes:
       # our config.json
       - ./config.json:/app/config.json:ro
       # named volume for saving rules
       - nginx-rules:/app/nginx/conf/
-  nginx_blocker:
+  nginx-blacklist:
     depends_on:
       - anubis
     image: nginx:alpine
-    container_name: nginx_blocker
     volumes:
       - "nginx-rules:/etc/nginx/conf.d/"
       - "./nginx/default.conf:/etc/nginx/conf.d/default.conf"
