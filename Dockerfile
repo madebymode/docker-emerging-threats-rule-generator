@@ -28,19 +28,24 @@ COPY --from=build /app/nginx_blacklist .
 COPY docker-entrypoint.sh .
 COPY docker-cronjob /etc/periodic/daily/update_block_lists
 
-# combine all of our run tasks for the smallest img possible
-RUN apk add --no-cache tzdata su-exec \
-&& addgroup -S rites && adduser -S anubis -G rites \
-&& chmod +x nginx_blacklist \ 
-&& chmod +x docker-entrypoint.sh \
-&& chmod +x /etc/periodic/daily/update_block_lists \
-&& ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime && \
-echo "America/New_York" > /etc/timezone \
-&& chown -R anubis:rites /app
+# Combine all of our run tasks for the smallest img possible
+# Install tzdata, su-exec, and docker-cli
+RUN apk add --no-cache tzdata su-exec docker-cli \
+    && addgroup -S rites \
+    && adduser -S anubis -G rites \
+    # Do not add anubis to the docker group here since it does not impact host permissions
+    && chmod +x nginx_blacklist \
+    && chmod +x docker-entrypoint.sh \
+    && chmod +x /etc/periodic/daily/update_block_lists \
+    && ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime \
+    && echo "America/New_York" > /etc/timezone \
+    && chown -R anubis:rites /app
+
+# Use a volume to share Docker socket from the host
+VOLUME ["/var/run/docker.sock"]
 
 # Set the entrypoint
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-# update our list on container start then run cron daemon to update once daily
+# Update our list on container start then run cron daemon to update once daily
 CMD /app/nginx_blacklist && crond -f -l 8
-

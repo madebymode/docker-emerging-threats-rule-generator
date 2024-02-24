@@ -1,5 +1,8 @@
 {
-    "block_lists": [
+  "nginx_container_names": [
+    "nginx-blacklist-1"
+  ],
+  "block_lists": [
         "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt",
         "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
     ],

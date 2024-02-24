@@ -2,6 +2,10 @@ version: '3'
 
 services:
   emerging-threats-rules:
+    # change the GID to match the docker group on the host - using "grep docker /etc/group | cut -d: -f3"
+    environment:
+      - DOCKER_HOST_GID=1000
+      - RUN_AS_ROOT=true
     image: mxmd/etr
     build: .
     volumes:
@@ -9,6 +13,8 @@ services:
       - ./config.json:/app/config.json:ro
       # named volume for saving rules
       - nginx-blocking-rules:/app/nginx/conf/
+      # docker socket for updating nginx
+      - /var/run/docker.sock:/var/run/docker.sock
   nginx-blacklist:
     depends_on:
       - emerging-threats-rules

@@ -1,4 +1,13 @@
 #!/bin/sh
 
 
-su-exec anubis /app/nginx_blacklist
+# Check if the RUN_AS_ROOT environment variable is set to "true"
+if [ "$RUN_AS_ROOT" = "true" ]; then
+    echo "Running as root..."
+    # Execute the command directly without su-exec to run as root
+    /app/nginx_blacklist
+else
+    echo "Running as user anubis..."
+    # Use su-exec to run the command as the anubis user
+    su-exec anubis /app/nginx_blacklist
+fi
