@@ -138,4 +138,6 @@ services:
     # this docker alias needs to be resolvable by other containers
     networks:
       - traefik-public
+volumes:
+  nginx-blocking-rules:
 ```
