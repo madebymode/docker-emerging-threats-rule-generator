@@ -4,17 +4,21 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"github.com/docker/docker/api/types/container"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"regexp"
+
+	"github.com/docker/docker/client"
+	"golang.org/x/net/context"
 )
 
 // Config represents the structure of the configuration file
 type Config struct {
-	BlockLists   []string `json:"block_lists"`
-	ConfFilePath string   `json:"nginx_conf_file_path"`
-	Webhooks     []string `json:"restart_nginx_webhooks"`
+	BlockLists          []string `json:"block_lists"`
+	ConfFilePath        string   `json:"nginx_conf_file_path"`
+	NginxContainerNames []string `json:"nginx_container_names"`
 }
 
 func readConfig(filePath string) (*Config, error) {
@@ -93,26 +97,24 @@ func writeBlocklistFile(addresses map[string]struct{}, filePath string) error {
 	return writer.Flush()
 }
 
-func triggerWebhook(webhookURL string) error {
-	resp, err := http.Post(webhookURL, "application/json", nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+func restartNginxContainers(cli *client.Client, containerNames []string) error {
+	ctx := context.Background()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to trigger webhook: status code %d", resp.StatusCode)
-	}
+	for _, containerName := range containerNames {
 
-	return nil
-}
-
-func triggerWebhooks(webhooks []string) error {
-	for _, webhook := range webhooks {
-		if err := triggerWebhook(webhook); err != nil {
-			return err
+		// Stop the container
+		if err := cli.ContainerStop(ctx, containerName, container.StopOptions{}); err != nil {
+			return fmt.Errorf("failed to stop container %s: %v", containerName, err)
 		}
+
+		// Start the container again
+		if err := cli.ContainerStart(ctx, containerName, container.StartOptions{}); err != nil {
+			return fmt.Errorf("failed to start container %s: %v", containerName, err)
+		}
+
+		fmt.Printf("Container %s restarted successfully.\n", containerName)
 	}
+
 	return nil
 }
 
@@ -144,11 +146,17 @@ func main() {
 		return
 	}
 
-	// Trigger Portainer webhooks to restart containers
-	if err := triggerWebhooks(config.Webhooks); err != nil {
-		fmt.Printf("Failed to trigger webhooks: %v\n", err)
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		fmt.Printf("Failed to create Docker client: %v\n", err)
 		return
 	}
 
-	fmt.Println("blocklist.conf file created and containers scheduled for restart.")
+	// Use the container names from the config to restart Nginx containers
+	if err := restartNginxContainers(cli, config.NginxContainerNames); err != nil {
+		fmt.Printf("Failed to restart Nginx containers: %v\n", err)
+		return
+	}
+
+	fmt.Println("Blocklist.conf file created and Nginx containers restarted successfully.")
 }
