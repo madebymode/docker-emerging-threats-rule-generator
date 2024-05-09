@@ -14,19 +14,27 @@ import (
 	"golang.org/x/net/context"
 )
 
-// Config represents the structure of the configuration file
+// Config struct includes local and remote IP lists for whitelisting and blocklisting
 type Config struct {
-	BlockLists          []string `json:"block_lists"`
+	LocalWhitelist      []string `json:"local_whitelist"`
+	LocalBlocklist      []string `json:"local_blocklist"`
+	RemoteBlocklists    []string `json:"remote_blocklists"`
 	ConfFilePath        string   `json:"nginx_conf_file_path"`
 	NginxContainerNames []string `json:"nginx_container_names"`
 }
 
+// readConfig reads the configuration from a JSON file
 func readConfig(filePath string) (*Config, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			fmt.Printf("Failed to close file: %v\n", err)
+		}
+	}(file)
 
 	decoder := json.NewDecoder(file)
 	config := &Config{}
@@ -38,6 +46,7 @@ func readConfig(filePath string) (*Config, error) {
 	return config, nil
 }
 
+// downloadFile fetches content from a specified URL
 func downloadFile(url string) (string, error) {
 	resp, err := http.Get(url)
 	if err != nil {
@@ -57,6 +66,7 @@ func downloadFile(url string) (string, error) {
 	return string(body), nil
 }
 
+// parseIPAddresses extracts IP addresses from string content using regex
 func parseIPAddresses(contents string) map[string]struct{} {
 	re := regexp.MustCompile(`(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?`)
 	matches := re.FindAllString(contents, -1)
@@ -69,7 +79,8 @@ func parseIPAddresses(contents string) map[string]struct{} {
 	return addresses
 }
 
-func writeBlocklistFile(addresses map[string]struct{}, filePath string) error {
+// writeBlocklistFile creates an NGINX configuration file for blocking IPs, considering whitelisted IPs
+func writeBlocklistFile(whitelist, blocklist map[string]struct{}, filePath string) error {
 	file, err := os.Create(filePath)
 	if err != nil {
 		return err
@@ -82,10 +93,12 @@ func writeBlocklistFile(addresses map[string]struct{}, filePath string) error {
 		return err
 	}
 
-	for address := range addresses {
-		_, err = writer.WriteString(fmt.Sprintf("    %s    1;\n", address))
-		if err != nil {
-			return err
+	for address := range blocklist {
+		if _, ok := whitelist[address]; !ok {
+			_, err = writer.WriteString(fmt.Sprintf("    %s    1;\n", address))
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -97,17 +110,15 @@ func writeBlocklistFile(addresses map[string]struct{}, filePath string) error {
 	return writer.Flush()
 }
 
+// restartNginxContainers restarts specified Docker containers
 func restartNginxContainers(cli *client.Client, containerNames []string) error {
 	ctx := context.Background()
 
 	for _, containerName := range containerNames {
-
-		// Stop the container
 		if err := cli.ContainerStop(ctx, containerName, container.StopOptions{}); err != nil {
 			return fmt.Errorf("failed to stop container %s: %v", containerName, err)
 		}
 
-		// Start the container again
 		if err := cli.ContainerStart(ctx, containerName, container.StartOptions{}); err != nil {
 			return fmt.Errorf("failed to start container %s: %v", containerName, err)
 		}
@@ -118,6 +129,7 @@ func restartNginxContainers(cli *client.Client, containerNames []string) error {
 	return nil
 }
 
+// main is the entry point for the application
 func main() {
 	config, err := readConfig("config.json")
 	if err != nil {
@@ -125,9 +137,17 @@ func main() {
 		return
 	}
 
-	allAddresses := make(map[string]struct{})
+	whitelist := make(map[string]struct{})
+	for _, address := range config.LocalWhitelist {
+		whitelist[address] = struct{}{}
+	}
 
-	for _, url := range config.BlockLists {
+	blocklist := make(map[string]struct{})
+	for _, address := range config.LocalBlocklist {
+		blocklist[address] = struct{}{}
+	}
+
+	for _, url := range config.RemoteBlocklists {
 		content, err := downloadFile(url)
 		if err != nil {
 			fmt.Printf("Failed to download file from %s: %v\n", url, err)
@@ -136,11 +156,11 @@ func main() {
 
 		addresses := parseIPAddresses(content)
 		for address := range addresses {
-			allAddresses[address] = struct{}{}
+			blocklist[address] = struct{}{}
 		}
 	}
 
-	err = writeBlocklistFile(allAddresses, config.ConfFilePath)
+	err = writeBlocklistFile(whitelist, blocklist, config.ConfFilePath)
 	if err != nil {
 		fmt.Printf("Failed to write blocklist file: %v\n", err)
 		return
@@ -152,7 +172,6 @@ func main() {
 		return
 	}
 
-	// Use the container names from the config to restart Nginx containers
 	if err := restartNginxContainers(cli, config.NginxContainerNames); err != nil {
 		fmt.Printf("Failed to restart Nginx containers: %v\n", err)
 		return
