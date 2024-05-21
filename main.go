@@ -18,6 +18,7 @@ import (
 type Config struct {
 	LocalWhitelist      []string `json:"local_whitelist"`
 	LocalBlocklist      []string `json:"local_blocklist"`
+	RemoteWhitelists    []string `json:"remote_whitelists"`
 	RemoteBlocklists    []string `json:"remote_blocklists"`
 	ConfFilePath        string   `json:"nginx_conf_file_path"`
 	NginxContainerNames []string `json:"nginx_container_names"`
@@ -140,6 +141,19 @@ func main() {
 	whitelist := make(map[string]struct{})
 	for _, address := range config.LocalWhitelist {
 		whitelist[address] = struct{}{}
+	}
+
+	for _, url := range config.RemoteWhitelists {
+		content, err := downloadFile(url)
+		if err != nil {
+			fmt.Printf("Failed to download file from %s: %v\n", url, err)
+			continue
+		}
+
+		addresses := parseIPAddresses(content)
+		for address := range addresses {
+			whitelist[address] = struct{}{}
+		}
 	}
 
 	blocklist := make(map[string]struct{})

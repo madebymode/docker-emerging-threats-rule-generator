@@ -30,7 +30,7 @@ COPY docker-cronjob /etc/periodic/daily/update_block_lists
 
 # Combine all of our run tasks for the smallest img possible
 # Install tzdata, su-exec, and docker-cli
-RUN apk add --no-cache tzdata su-exec docker-cli \
+RUN apk add --no-cache tzdata su-exec \
     && addgroup -S rites \
     && adduser -S anubis -G rites \
     # Do not add anubis to the docker group here since it does not impact host permissions
