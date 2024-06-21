@@ -86,7 +86,12 @@ func writeBlocklistFile(whitelist, blocklist map[string]struct{}, filePath strin
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			fmt.Printf("Failed to close file: %v\n", err)
+		}
+	}(file)
 
 	writer := bufio.NewWriter(file)
 	_, err = writer.WriteString("# blocklist.conf\n\ngeo $blocked_ip {\n    default        0;\n\n")
@@ -132,7 +137,7 @@ func restartNginxContainers(cli *client.Client, containerNames []string) error {
 
 // main is the entry point for the application
 func main() {
-	config, err := readConfig("config.json")
+	config, err := readConfig("/app/config.json")
 	if err != nil {
 		fmt.Printf("Failed to read config file: %v\n", err)
 		return
