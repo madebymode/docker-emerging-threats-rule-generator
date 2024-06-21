@@ -1,5 +1,6 @@
 #!/bin/sh
 
+echo "Starting cron job script..."
 
 # Check if the RUN_AS_ROOT environment variable is set to "true"
 if [ "$RUN_AS_ROOT" = "true" ]; then

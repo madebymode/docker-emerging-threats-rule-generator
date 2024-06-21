@@ -36,16 +36,36 @@ echo "Adjusting permissions of /app/nginx/conf/..."
 chown -R anubis:rites /app/nginx/conf/
 echo "Permissions adjusted."
 
+# Give the anubis user write access to stdout and stderr
+chown anubis:rites /dev/stdout /dev/stderr
+
+# Ensure correct permissions for crontab file
+chown root:root /var/spool/cron/crontabs/root
+chmod 600 /var/spool/cron/crontabs/root
+
 
 # Check if the RUN_AS_ROOT environment variable is set to "true"
 if [ "$RUN_AS_ROOT" = "true" ]; then
-    echo "Running as root..."
+    echo "Running FIRST etr run as root..."
     # Execute the command directly without su-exec to run as root
-    exec "$@"
+    /app/nginx_blacklist
 else
-    echo "Executing main container command as anubis user..."
-    exec su-exec anubis "$@"
+    echo "Running FIRST etr run as user anubis..."
+    # Use su-exec to run the command as the anubis user
+    su-exec anubis /app/nginx_blacklist
 fi
 
-
-
+# Check if the first argument is "crond"
+if [ "$1" = "crond" ]; then
+    echo "Running crond as root..."
+    exec "$@"
+else
+    # Check if the RUN_AS_ROOT environment variable is set to "true"
+    if [ "$RUN_AS_ROOT" = "true" ]; then
+        echo "Running as root..."
+        exec "$@"
+    else
+        echo "Executing main container command as anubis user..."
+        exec su-exec anubis "$@"
+    fi
+fi
