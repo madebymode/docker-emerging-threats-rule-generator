@@ -3,7 +3,7 @@ module nginx_blacklist
 go 1.22
 
 require (
-	github.com/docker/docker v27.0.0+incompatible
+	github.com/docker/docker v27.1.0+incompatible
 	golang.org/x/net v0.26.0
 )
 
