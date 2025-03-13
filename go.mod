@@ -1,10 +1,9 @@
 module nginx_blacklist
 
 go 1.23
-
 require (
 	github.com/docker/docker v27.4.0+incompatible
-	golang.org/x/net v0.32.0
+	golang.org/x/net v0.36.0
 )
 
 require (
@@ -30,7 +29,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.33.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.33.0 // indirect
 	go.opentelemetry.io/otel/trace v1.33.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/time v0.8.0 // indirect
 	gotest.tools/v3 v3.5.1 // indirect
 )
