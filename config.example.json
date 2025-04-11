@@ -3,6 +3,11 @@
     "nginx-blacklist-1"
   ],
   "block_lists": [
+    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/8.txt",
+    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/7.txt",
+    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/6.txt",
+    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/5.txt",
+    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/4.txt",
     "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt",
     "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
   ],
