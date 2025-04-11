@@ -4,17 +4,19 @@ Docker Hub:
 
 https://hub.docker.com/repository/docker/mxmd/etr
 
-
-
 ## Overview
 
-This Dockerized Go application automates the generation of an Nginx `blocklist.conf` file from dynamic emerging threat lists. It is designed to update the blocklist daily, helping you secure your servers against known malicious IP addresses.
+This Dockerized Go application automates the generation of an Nginx `blocklist.conf` file from dynamic emerging threat
+lists. It is designed to update the blocklist daily, helping you secure your servers against known malicious IP
+addresses.
 
-The application executes as a daily cron job inside the container, ensuring the `blocklist.conf` file is updated with the latest emerging threat IPs.
+The application executes as a daily cron job inside the container, ensuring the `blocklist.conf` file is updated with
+the latest emerging threat IPs.
 
 ## Configuration
 
-The application requires a `config.json` file to specify the URLs for the emerging threat lists and the output path for the `blocklist.conf` file. Here is a template for the `config.json`:
+The application requires a `config.json` file to specify the URLs for the emerging threat lists and the output path for
+the `blocklist.conf` file. Here is a template for the `config.json`:
 
 ```json
 {
@@ -30,15 +32,19 @@ The application requires a `config.json` file to specify the URLs for the emergi
 }
 ```
 
-Adjust the `block_lists` array with the URLs of your chosen emerging threat lists and set the `nginx_conf_file_path` to the desired path within your Nginx container.
+Adjust the `block_lists` array with the URLs of your chosen emerging threat lists and set the `nginx_conf_file_path` to
+the desired path within your Nginx container.
 
 ## Using with Nginx
 
-To apply the generated `blocklist.conf` in Nginx, mount the named volume (`nginx-blocking-rules`) used by the `nginx_blacklist` container to your Nginx container. This setup allows Nginx to use the updated blocklist without manual intervention.
+To apply the generated `blocklist.conf` in Nginx, mount the named volume (`nginx-blocking-rules`) used by the
+`nginx_blacklist` container to your Nginx container. This setup allows Nginx to use the updated blocklist without manual
+intervention.
 
 ## Docker Compose
 
-For ease of deployment, a `docker-compose.yml` file is provided. It orchestrates both the `nginx_blacklist` application and an Nginx container, ensuring they are configured to share the blocklist file. Here is a simplified example:
+For ease of deployment, a `docker-compose.yml` file is provided. It orchestrates both the `nginx_blacklist` application
+and an Nginx container, ensuring they are configured to share the blocklist file. Here is a simplified example:
 
 ```yaml
 version: '3'
