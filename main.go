@@ -1,19 +1,20 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
-	"fmt"
-	"github.com/docker/docker/api/types/container"
-	"io/ioutil"
-	"net"
-	"net/http"
-	"os"
-	"regexp"
-	"strings"
+  "bufio"
+  "encoding/json"
+  "fmt"
+  "io/ioutil"
+  "net"
+  "net/http"
+  "os"
+  "regexp"
+  "strings"
 
-	"github.com/docker/docker/client"
-	"golang.org/x/net/context"
+  "github.com/docker/docker/api/types/container"
+
+  "github.com/docker/docker/client"
+  "golang.org/x/net/context"
 )
 
 // Config struct includes local and remote IP lists for whitelisting and blocklisting
