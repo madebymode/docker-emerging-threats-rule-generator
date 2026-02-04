@@ -1,8 +1,6 @@
 module nginx_blacklist
 
-go 1.23.0
-
-toolchain go1.24.0
+go 1.25
 
 require (
 	github.com/docker/docker v28.3.3+incompatible

@@ -1,5 +1,5 @@
 # Use a versioned Go Alpine image for building
-FROM golang:1.23-alpine3.20 AS build
+FROM golang:1.25-alpine3.23 AS build
 
 # Set the working directory
 WORKDIR /app
@@ -18,7 +18,7 @@ ENV CGO_ENABLED=1
 RUN go build -o nginx_blacklist
 
 # Use a smaller Alpine image for running the binary
-FROM alpine:3.20
+FROM alpine:3.23
 
 # Set the working directory
 WORKDIR /app
