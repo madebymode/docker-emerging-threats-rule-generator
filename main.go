@@ -9,13 +9,19 @@ import (
   "net/http"
   "os"
   "regexp"
+  "sort"
   "strings"
+  "time"
 
   "github.com/docker/docker/api/types/container"
 
   "github.com/docker/docker/client"
   "golang.org/x/net/context"
 )
+
+func logf(format string, args ...interface{}) {
+	fmt.Printf("["+time.Now().Format("2006/01/02 15:04:05")+"] "+format, args...)
+}
 
 // Config struct includes local and remote IP lists for whitelisting and blocklisting
 type Config struct {
@@ -36,7 +42,7 @@ func readConfig(filePath string) (*Config, error) {
 	defer func(file *os.File) {
 		err := file.Close()
 		if err != nil {
-			fmt.Printf("Failed to close file: %v\n", err)
+			logf("Failed to close file: %v\n", err)
 		}
 	}(file)
 
@@ -225,7 +231,7 @@ func writeBlocklistFile(whitelist, blocklist map[string]struct{}, filePath strin
 	defer func(file *os.File) {
 		err := file.Close()
 		if err != nil {
-			fmt.Printf("Failed to close file: %v\n", err)
+			logf("Failed to close file: %v\n", err)
 		}
 	}(file)
 
@@ -235,12 +241,20 @@ func writeBlocklistFile(whitelist, blocklist map[string]struct{}, filePath strin
 		return err
 	}
 
+	var addresses []string
 	for address := range blocklist {
-		if !isIPWhitelisted(address, whitelist) {
-			_, err = writer.WriteString(fmt.Sprintf("    %s    1;\n", address))
-			if err != nil {
-				return err
-			}
+		if isIPWhitelisted(address, whitelist) {
+			logf("Skipping whitelisted IP: %s\n", address)
+		} else {
+			addresses = append(addresses, address)
+		}
+	}
+	sort.Strings(addresses)
+
+	for _, address := range addresses {
+		_, err = writer.WriteString(fmt.Sprintf("    %s    1;\n", address))
+		if err != nil {
+			return err
 		}
 	}
 
@@ -265,7 +279,7 @@ func restartNginxContainers(cli *client.Client, containerNames []string) error {
 			return fmt.Errorf("failed to start container %s: %v", containerName, err)
 		}
 
-		fmt.Printf("Container %s restarted successfully.\n", containerName)
+		logf("Container %s restarted successfully.\n", containerName)
 	}
 
 	return nil
@@ -275,7 +289,7 @@ func restartNginxContainers(cli *client.Client, containerNames []string) error {
 func main() {
 	config, err := readConfig("/app/config.json")
 	if err != nil {
-		fmt.Printf("Failed to read config file: %v\n", err)
+		logf("Failed to read config file: %v\n", err)
 		return
 	}
 
@@ -287,7 +301,7 @@ func main() {
 	for _, url := range config.RemoteWhitelists {
 		content, err := downloadFile(url)
 		if err != nil {
-			fmt.Printf("Failed to download file from %s: %v\n", url, err)
+			logf("Failed to download file from %s: %v\n", url, err)
 			continue
 		}
 
@@ -305,7 +319,7 @@ func main() {
 	for _, url := range config.RemoteBlocklists {
 		content, err := downloadFile(url)
 		if err != nil {
-			fmt.Printf("Failed to download file from %s: %v\n", url, err)
+			logf("Failed to download file from %s: %v\n", url, err)
 			continue
 		}
 
@@ -317,20 +331,20 @@ func main() {
 
 	err = writeBlocklistFile(whitelist, blocklist, config.ConfFilePath)
 	if err != nil {
-		fmt.Printf("Failed to write blocklist file: %v\n", err)
+		logf("Failed to write blocklist file: %v\n", err)
 		return
 	}
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		fmt.Printf("Failed to create Docker client: %v\n", err)
+		logf("Failed to create Docker client: %v\n", err)
 		return
 	}
 
 	if err := restartNginxContainers(cli, config.NginxContainerNames); err != nil {
-		fmt.Printf("Failed to restart Nginx containers: %v\n", err)
+		logf("Failed to restart Nginx containers: %v\n", err)
 		return
 	}
 
-	fmt.Println("Blocklist.conf file created and Nginx containers restarted successfully.")
+	logf("Blocklist.conf file created and Nginx containers restarted successfully.\n")
 }
