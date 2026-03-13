@@ -2,6 +2,7 @@ package main
 
 import (
   "fmt"
+  "net"
   "net/http"
   "net/http/httptest"
   "os"
@@ -465,5 +466,126 @@ func TestBlocklistEdgeCases(t *testing.T) {
         }
       }
     })
+  }
+}
+
+// TestSubtractCIDR tests the CIDR subtraction algorithm
+func TestSubtractCIDR(t *testing.T) {
+  parse := func(s string) *net.IPNet {
+    _, n, err := net.ParseCIDR(s)
+    if err != nil {
+      t.Fatalf("failed to parse %s: %v", s, err)
+    }
+    return n
+  }
+
+  tests := []struct {
+    name    string
+    base    string
+    exclude string
+    // expected resulting CIDRs; nil means empty result (fully excluded)
+    want []string
+  }{
+    {
+      name:    "no overlap returns base unchanged",
+      base:    "10.0.0.0/8",
+      exclude: "192.168.0.0/16",
+      want:    []string{"10.0.0.0/8"},
+    },
+    {
+      name:    "base fully contained in exclude returns empty",
+      base:    "10.1.0.0/16",
+      exclude: "10.0.0.0/8",
+      want:    nil,
+    },
+    {
+      name:    "equal networks returns empty",
+      base:    "192.168.1.0/24",
+      exclude: "192.168.1.0/24",
+      want:    nil,
+    },
+    {
+      name:    "exclude is /32 within /30 carves 3 hosts",
+      base:    "192.168.1.0/30",
+      exclude: "192.168.1.1/32",
+      want:    []string{"192.168.1.0/32", "192.168.1.2/31"},
+    },
+    {
+      // 52.80.0.0/14 covers 52.80-52.83; minus 52.82.128.0/19 (52.82.128-52.82.159)
+      // minimal covering set of the remainder:
+      name:    "real-world: cloudfront /19 carved from china /14",
+      base:    "52.80.0.0/14",
+      exclude: "52.82.128.0/19",
+      want: []string{
+        "52.80.0.0/15",
+        "52.82.0.0/17",
+        "52.82.160.0/19",
+        "52.82.192.0/18",
+        "52.83.0.0/16",
+      },
+    },
+  }
+
+  for _, tt := range tests {
+    t.Run(tt.name, func(t *testing.T) {
+      result := subtractCIDR(parse(tt.base), parse(tt.exclude))
+
+      if len(result) != len(tt.want) {
+        got := make([]string, len(result))
+        for i, n := range result {
+          got[i] = n.String()
+        }
+        t.Fatalf("subtractCIDR(%s, %s) = %v, want %v", tt.base, tt.exclude, got, tt.want)
+      }
+
+      for i, n := range result {
+        if n.String() != tt.want[i] {
+          t.Errorf("result[%d] = %s, want %s", i, n.String(), tt.want[i])
+        }
+      }
+    })
+  }
+}
+
+// TestBlocklistCIDRCarving verifies that when a whitelist CIDR is a subset of a blocklist
+// CIDR, the non-whitelisted portions are still blocked (not silently dropped).
+func TestBlocklistCIDRCarving(t *testing.T) {
+  whitelist := map[string]string{
+    "52.82.128.0/19": "cloudfront",
+  }
+  blocklist := map[string]string{
+    "52.80.0.0/14": "cn-aggregated",
+  }
+
+  tmpFile, err := os.CreateTemp("", "carving-test-*.conf")
+  if err != nil {
+    t.Fatalf("failed to create temp file: %v", err)
+  }
+  defer os.Remove(tmpFile.Name())
+  defer tmpFile.Close()
+
+  if err := writeBlocklistFile(whitelist, blocklist, tmpFile.Name()); err != nil {
+    t.Fatalf("writeBlocklistFile: %v", err)
+  }
+
+  content, err := os.ReadFile(tmpFile.Name())
+  if err != nil {
+    t.Fatalf("failed to read file: %v", err)
+  }
+  s := string(content)
+
+  // The original large CIDR must not appear verbatim (it was split)
+  if strings.Contains(s, "52.80.0.0/14    1;") {
+    t.Error("original blocklist CIDR should be split, not emitted verbatim")
+  }
+
+  // The whitelisted subnet must not appear in the block list
+  if strings.Contains(s, "52.82.128.0/19") {
+    t.Error("whitelisted subnet 52.82.128.0/19 must not be blocked")
+  }
+
+  // At least one carved sub-range should be present to block the non-whitelisted addresses
+  if !strings.Contains(s, "52.80.0.0/15    1;") {
+    t.Error("carved sub-range 52.80.0.0/15 should be blocked")
   }
 }

@@ -204,6 +204,55 @@ func isIPInCIDR(ip, cidr string, strictMode ...bool) bool {
 	}
 }
 
+// splitNetwork splits a CIDR into two equal halves with maskSize+1.
+func splitNetwork(network *net.IPNet) (*net.IPNet, *net.IPNet) {
+	maskSize, bits := network.Mask.Size()
+	newMask := net.CIDRMask(maskSize+1, bits)
+
+	half1IP := make(net.IP, len(network.IP))
+	copy(half1IP, network.IP)
+
+	half2IP := make(net.IP, len(network.IP))
+	copy(half2IP, network.IP)
+	byteIdx := maskSize / 8
+	bitIdx := uint(7 - maskSize%8)
+	half2IP[byteIdx] |= 1 << bitIdx
+
+	return &net.IPNet{IP: half1IP, Mask: newMask}, &net.IPNet{IP: half2IP, Mask: newMask}
+}
+
+// subtractCIDR returns the minimal set of CIDRs covering all of base
+// except for any addresses also covered by exclude.
+// Returns nil if base is entirely within exclude.
+// Returns [base] if there is no overlap.
+func subtractCIDR(base, exclude *net.IPNet) []*net.IPNet {
+	baseMask, _ := base.Mask.Size()
+	excludeMask, _ := exclude.Mask.Size()
+
+	// No overlap
+	if !base.Contains(exclude.IP) && !exclude.Contains(base.IP) {
+		return []*net.IPNet{base}
+	}
+
+	// Base is fully contained within exclude (or equal)
+	if exclude.Contains(base.IP) && excludeMask <= baseMask {
+		return nil
+	}
+
+	// Exclude is a proper subset of base: split and recurse
+	if baseMask >= 32 {
+		return nil
+	}
+
+	half1, half2 := splitNetwork(base)
+	if half1.Contains(exclude.IP) {
+		result := subtractCIDR(half1, exclude)
+		return append(result, half2)
+	}
+	result := subtractCIDR(half2, exclude)
+	return append([]*net.IPNet{half1}, result...)
+}
+
 // isIPWhitelisted checks if an IP is whitelisted considering CIDR ranges.
 // Returns (isWhitelisted, matchedEntry, source).
 func isIPWhitelisted(ip string, whitelist map[string]string) (bool, string, string) {
@@ -244,10 +293,66 @@ func writeBlocklistFile(whitelist, blocklist map[string]string, filePath string)
 
 	var addresses []string
 	for address, blocklistSource := range blocklist {
-		if whitelisted, matchedEntry, whitelistSource := isIPWhitelisted(address, whitelist); whitelisted {
-			logf("Skipping whitelisted IP: %s (matched: %s from %s) - found in blocklist: %s\n", address, matchedEntry, whitelistSource, blocklistSource)
+		// Parse blocklist entry as a network (single IPs become /32)
+		var baseNet *net.IPNet
+		if ip := net.ParseIP(address); ip != nil {
+			ip4 := ip.To4()
+			if ip4 == nil {
+				continue // skip IPv6
+			}
+			baseNet = &net.IPNet{IP: ip4, Mask: net.CIDRMask(32, 32)}
 		} else {
+			var parseErr error
+			_, baseNet, parseErr = net.ParseCIDR(address)
+			if parseErr != nil {
+				continue
+			}
+		}
+
+		// Subtract all whitelist entries from this blocklist network
+		remaining := []*net.IPNet{baseNet}
+		for wlEntry := range whitelist {
+			var excludeNet *net.IPNet
+			if ip := net.ParseIP(wlEntry); ip != nil {
+				ip4 := ip.To4()
+				if ip4 == nil {
+					continue
+				}
+				excludeNet = &net.IPNet{IP: ip4, Mask: net.CIDRMask(32, 32)}
+			} else {
+				_, excludeNet, _ = net.ParseCIDR(wlEntry)
+			}
+			if excludeNet == nil {
+				continue
+			}
+			var next []*net.IPNet
+			for _, subnet := range remaining {
+				next = append(next, subtractCIDR(subnet, excludeNet)...)
+			}
+			remaining = next
+			if len(remaining) == 0 {
+				break
+			}
+		}
+
+		if len(remaining) == 0 {
+			// Entirely whitelisted
+			if whitelisted, matchedEntry, whitelistSource := isIPWhitelisted(address, whitelist); whitelisted {
+				logf("Skipping whitelisted IP: %s (matched: %s from %s) - found in blocklist: %s\n",
+					address, matchedEntry, whitelistSource, blocklistSource)
+			} else {
+				logf("Skipping whitelisted IP: %s - found in blocklist: %s\n", address, blocklistSource)
+			}
+		} else if len(remaining) == 1 && remaining[0].String() == baseNet.String() {
+			// No whitelist overlap; keep original entry as-is
 			addresses = append(addresses, address)
+		} else {
+			// Partial overlap: emit carved subnets, omitting whitelisted portions
+			logf("Splitting blocklist CIDR %s (from %s): retaining %d sub-ranges after whitelist exclusions\n",
+				address, blocklistSource, len(remaining))
+			for _, subnet := range remaining {
+				addresses = append(addresses, subnet.String())
+			}
 		}
 	}
 	sort.Strings(addresses)
