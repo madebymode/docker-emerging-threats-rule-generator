@@ -13,13 +13,13 @@ import (
 
 // TestNginxConfigFormat tests that generated nginx config follows proper format
 func TestNginxConfigFormat(t *testing.T) {
-  whitelist := map[string]struct{}{
-    "192.168.1.1": {},
+  whitelist := map[string]string{
+    "192.168.1.1": "local",
   }
-  blocklist := map[string]struct{}{
-    "10.0.0.1":       {},
-    "172.16.0.1":     {},
-    "192.168.2.0/24": {},
+  blocklist := map[string]string{
+    "10.0.0.1":       "test",
+    "172.16.0.1":     "test",
+    "192.168.2.0/24": "test",
   }
 
   tmpFile, err := os.CreateTemp("", "nginx-format-*.conf")
@@ -115,34 +115,34 @@ func TestNginxConfigFormat(t *testing.T) {
 func TestNginxConfigSyntaxValidation(t *testing.T) {
   tests := []struct {
     name        string
-    blocklist   map[string]struct{}
+    blocklist   map[string]string
     expectValid bool
   }{
     {
       name: "Valid IPv4 addresses",
-      blocklist: map[string]struct{}{
-        "192.168.1.1": {},
-        "10.0.0.1":    {},
-        "172.16.0.1":  {},
+      blocklist: map[string]string{
+        "192.168.1.1": "test",
+        "10.0.0.1":    "test",
+        "172.16.0.1":  "test",
       },
       expectValid: true,
     },
     {
       name: "Valid CIDR ranges",
-      blocklist: map[string]struct{}{
-        "192.168.1.0/24": {},
-        "10.0.0.0/8":     {},
-        "172.16.0.0/16":  {},
+      blocklist: map[string]string{
+        "192.168.1.0/24": "test",
+        "10.0.0.0/8":     "test",
+        "172.16.0.0/16":  "test",
       },
       expectValid: true,
     },
     {
       name: "Mixed valid entries",
-      blocklist: map[string]struct{}{
-        "192.168.1.1":    {},
-        "10.0.0.0/8":     {},
-        "172.16.0.1":     {},
-        "203.0.113.0/24": {},
+      blocklist: map[string]string{
+        "192.168.1.1":    "test",
+        "10.0.0.0/8":     "test",
+        "172.16.0.1":     "test",
+        "203.0.113.0/24": "test",
       },
       expectValid: true,
     },
@@ -157,7 +157,7 @@ func TestNginxConfigSyntaxValidation(t *testing.T) {
       defer os.Remove(tmpFile.Name())
       defer tmpFile.Close()
 
-      whitelist := map[string]struct{}{}
+      whitelist := map[string]string{}
       err = writeBlocklistFile(whitelist, tt.blocklist, tmpFile.Name())
       if err != nil {
         t.Fatalf("Failed to write blocklist file: %v", err)
@@ -244,19 +244,19 @@ func isValidIPOrCIDR(s string) bool {
 // TestNginxConfigPerformance tests config generation performance with large datasets
 func TestNginxConfigPerformance(t *testing.T) {
   // Create large datasets
-  whitelist := make(map[string]struct{})
-  blocklist := make(map[string]struct{})
+  whitelist := make(map[string]string)
+  blocklist := make(map[string]string)
 
   // Add 1000 whitelist entries
   for i := 0; i < 1000; i++ {
     ip := fmt.Sprintf("192.168.%d.%d", i/256, i%256)
-    whitelist[ip] = struct{}{}
+    whitelist[ip] = "local"
   }
 
   // Add 10000 blocklist entries
   for i := 0; i < 10000; i++ {
     ip := fmt.Sprintf("10.%d.%d.%d", i/65536, (i/256)%256, i%256)
-    blocklist[ip] = struct{}{}
+    blocklist[ip] = "test"
   }
 
   tmpFile, err := os.CreateTemp("", "nginx-perf-*.conf")
@@ -304,12 +304,12 @@ func TestNginxConfigConcurrency(t *testing.T) {
   done := make(chan bool, numGoroutines)
 
   // Test data
-  whitelist := map[string]struct{}{
-    "192.168.1.1": {},
+  whitelist := map[string]string{
+    "192.168.1.1": "local",
   }
-  blocklist := map[string]struct{}{
-    "10.0.0.1":   {},
-    "172.16.0.1": {},
+  blocklist := map[string]string{
+    "10.0.0.1":   "test",
+    "172.16.0.1": "test",
   }
 
   // Start goroutines
@@ -361,10 +361,10 @@ func TestNginxConfigConcurrency(t *testing.T) {
 
 // TestNginxConfigReload tests config file structure for nginx reload compatibility
 func TestNginxConfigReload(t *testing.T) {
-  blocklist := map[string]struct{}{
-    "10.0.0.1":       {},
-    "172.16.0.1":     {},
-    "192.168.1.0/24": {},
+  blocklist := map[string]string{
+    "10.0.0.1":       "test",
+    "172.16.0.1":     "test",
+    "192.168.1.0/24": "test",
   }
 
   tmpFile, err := os.CreateTemp("", "nginx-reload-*.conf")
@@ -374,7 +374,7 @@ func TestNginxConfigReload(t *testing.T) {
   defer os.Remove(tmpFile.Name())
   defer tmpFile.Close()
 
-  err = writeBlocklistFile(map[string]struct{}{}, blocklist, tmpFile.Name())
+  err = writeBlocklistFile(map[string]string{}, blocklist, tmpFile.Name())
   if err != nil {
     t.Fatalf("Failed to write blocklist file: %v", err)
   }
@@ -469,8 +469,8 @@ func TestNginxConfigReload(t *testing.T) {
 
 // TestNginxVariableNaming tests that the nginx variable name is correct
 func TestNginxVariableNaming(t *testing.T) {
-  blocklist := map[string]struct{}{
-    "10.0.0.1": {},
+  blocklist := map[string]string{
+    "10.0.0.1": "test",
   }
 
   tmpFile, err := os.CreateTemp("", "nginx-var-*.conf")
@@ -480,7 +480,7 @@ func TestNginxVariableNaming(t *testing.T) {
   defer os.Remove(tmpFile.Name())
   defer tmpFile.Close()
 
-  err = writeBlocklistFile(map[string]struct{}{}, blocklist, tmpFile.Name())
+  err = writeBlocklistFile(map[string]string{}, blocklist, tmpFile.Name())
   if err != nil {
     t.Fatalf("Failed to write blocklist file: %v", err)
   }

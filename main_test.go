@@ -103,10 +103,10 @@ func TestCIDRHandling(t *testing.T) {
 
 // TestIsIPWhitelisted tests the complete whitelist functionality
 func TestIsIPWhitelisted(t *testing.T) {
-  whitelist := map[string]struct{}{
-    "192.168.1.1":       {},
-    "10.0.0.0/8":        {},
-    "216.144.248.16/28": {},
+  whitelist := map[string]string{
+    "192.168.1.1":       "local",
+    "10.0.0.0/8":        "local",
+    "216.144.248.16/28": "local",
   }
 
   tests := []struct {
@@ -184,20 +184,20 @@ func TestIsIPWhitelisted(t *testing.T) {
 // TestBlocklistGeneration tests the entire workflow with real-world examples
 func TestBlocklistGeneration(t *testing.T) {
   // Sample whitelist with CIDR ranges
-  whitelist := map[string]struct{}{
-    "104.131.107.63":    {},
-    "122.248.234.23":    {},
-    "216.144.248.16/28": {},
-    "216.245.221.80/28": {},
+  whitelist := map[string]string{
+    "104.131.107.63":    "local",
+    "122.248.234.23":    "local",
+    "216.144.248.16/28": "local",
+    "216.245.221.80/28": "local",
   }
 
   // Sample blocklist with some IPs within the whitelisted ranges
-  blocklist := map[string]struct{}{
-    "45.135.193.100": {}, // Not in any whitelist
-    "216.144.248.20": {}, // Should be whitelisted (in 216.144.248.16/28)
-    "216.245.221.85": {}, // Should be whitelisted (in 216.245.221.80/28)
-    "122.248.234.23": {}, // Exact match in whitelist
-    "192.168.1.1":    {}, // Not in any whitelist
+  blocklist := map[string]string{
+    "45.135.193.100": "test", // Not in any whitelist
+    "216.144.248.20": "test", // Should be whitelisted (in 216.144.248.16/28)
+    "216.245.221.85": "test", // Should be whitelisted (in 216.245.221.80/28)
+    "122.248.234.23": "test", // Exact match in whitelist
+    "192.168.1.1":    "test", // Not in any whitelist
   }
 
   // Expected results after filtering
@@ -250,14 +250,14 @@ func TestBlocklistGeneration(t *testing.T) {
 // needs to be whitelisted despite being explicitly in a blocklist
 func TestRealWorldWhitelistScenario(t *testing.T) {
   // Whitelist with specific CIDR ranges from your example
-  whitelist := map[string]struct{}{
-    "216.144.248.16/28": {},
-    "216.245.221.80/28": {},
+  whitelist := map[string]string{
+    "216.144.248.16/28": "local",
+    "216.245.221.80/28": "local",
   }
 
   // Blocklist with specific IPs that fall within those ranges
-  blocklist := map[string]struct{}{
-    "216.144.248.28": {}, // Falls within 216.144.248.16/28
+  blocklist := map[string]string{
+    "216.144.248.28": "test", // Falls within 216.144.248.16/28
   }
 
   // Create a temporary file for testing
@@ -339,11 +339,11 @@ func TestCIDRvsBlocklistCIDR(t *testing.T) {
   for _, tt := range tests {
     t.Run(tt.name, func(t *testing.T) {
       // Set up test whitelist and blocklist
-      whitelist := map[string]struct{}{
-        tt.whitelistCIDR: {},
+      whitelist := map[string]string{
+        tt.whitelistCIDR: "local",
       }
-      blocklist := map[string]struct{}{
-        tt.blocklistCIDR: {},
+      blocklist := map[string]string{
+        tt.blocklistCIDR: "test",
       }
 
       // Create a temporary file for testing

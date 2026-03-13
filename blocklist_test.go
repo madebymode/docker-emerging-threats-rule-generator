@@ -166,22 +166,22 @@ func TestDownloadFile(t *testing.T) {
 func TestWriteBlocklistFile(t *testing.T) {
   tests := []struct {
     name               string
-    whitelist          map[string]struct{}
-    blocklist          map[string]struct{}
+    whitelist          map[string]string
+    blocklist          map[string]string
     expectedContains   []string
     expectedNotContain []string
   }{
     {
       name: "Basic blocklist with whitelist filtering",
-      whitelist: map[string]struct{}{
-        "192.168.1.1": {},
-        "10.0.0.0/8":  {},
+      whitelist: map[string]string{
+        "192.168.1.1": "local",
+        "10.0.0.0/8":  "local",
       },
-      blocklist: map[string]struct{}{
-        "192.168.1.1": {}, // Should be filtered out
-        "10.1.2.3":    {}, // Should be filtered out (in 10.0.0.0/8)
-        "172.16.0.1":  {}, // Should be included
-        "8.8.8.8":     {}, // Should be included
+      blocklist: map[string]string{
+        "192.168.1.1": "test", // Should be filtered out
+        "10.1.2.3":    "test", // Should be filtered out (in 10.0.0.0/8)
+        "172.16.0.1":  "test", // Should be included
+        "8.8.8.8":     "test", // Should be included
       },
       expectedContains: []string{
         "geo $blocked_ip",
@@ -196,13 +196,13 @@ func TestWriteBlocklistFile(t *testing.T) {
     },
     {
       name: "CIDR ranges in blocklist",
-      whitelist: map[string]struct{}{
-        "216.144.248.16/28": {},
+      whitelist: map[string]string{
+        "216.144.248.16/28": "local",
       },
-      blocklist: map[string]struct{}{
-        "216.144.248.0/24":  {}, // Larger CIDR overlaps with whitelist, gets filtered
-        "216.144.248.16/30": {}, // Smaller CIDR within whitelist, should be filtered
-        "192.168.0.0/16":    {}, // Should be included
+      blocklist: map[string]string{
+        "216.144.248.0/24":  "test", // Larger CIDR overlaps with whitelist, gets filtered
+        "216.144.248.16/30": "test", // Smaller CIDR within whitelist, should be filtered
+        "192.168.0.0/16":    "test", // Should be included
       },
       expectedContains: []string{
         "192.168.0.0/16    1;",
@@ -214,8 +214,8 @@ func TestWriteBlocklistFile(t *testing.T) {
     },
     {
       name:      "Empty lists",
-      whitelist: map[string]struct{}{},
-      blocklist: map[string]struct{}{},
+      whitelist: map[string]string{},
+      blocklist: map[string]string{},
       expectedContains: []string{
         "geo $blocked_ip",
         "default        0;",
@@ -294,12 +294,12 @@ func TestBlocklistIntegration(t *testing.T) {
 
   // Simulate the main workflow
   // 1. Build whitelist
-  whitelist := make(map[string]struct{})
+  whitelist := make(map[string]string)
 
   // Add local whitelist entries
   localWhitelist := []string{"172.16.1.1"}
   for _, ip := range localWhitelist {
-    whitelist[ip] = struct{}{}
+    whitelist[ip] = "local_whitelist"
   }
 
   // Add remote whitelist entries
@@ -309,16 +309,16 @@ func TestBlocklistIntegration(t *testing.T) {
   }
   whitelistAddresses := parseIPAddresses(whitelistContent)
   for address := range whitelistAddresses {
-    whitelist[address] = struct{}{}
+    whitelist[address] = whitelistServer.URL
   }
 
   // 2. Build blocklist
-  blocklist := make(map[string]struct{})
+  blocklist := make(map[string]string)
 
   // Add local blocklist entries
   localBlocklist := []string{"203.0.113.1"}
   for _, ip := range localBlocklist {
-    blocklist[ip] = struct{}{}
+    blocklist[ip] = "local_blocklist"
   }
 
   // Add remote blocklist entries
@@ -328,7 +328,7 @@ func TestBlocklistIntegration(t *testing.T) {
   }
   blocklistAddresses := parseIPAddresses(blocklistContent)
   for address := range blocklistAddresses {
-    blocklist[address] = struct{}{}
+    blocklist[address] = blocklistServer.URL
   }
 
   // 3. Generate nginx config
@@ -375,40 +375,40 @@ func TestBlocklistIntegration(t *testing.T) {
 func TestBlocklistEdgeCases(t *testing.T) {
   tests := []struct {
     name      string
-    whitelist map[string]struct{}
-    blocklist map[string]struct{}
+    whitelist map[string]string
+    blocklist map[string]string
     testCase  string
   }{
     {
       name: "Overlapping CIDR ranges",
-      whitelist: map[string]struct{}{
-        "192.168.0.0/16": {}, // Large range
+      whitelist: map[string]string{
+        "192.168.0.0/16": "local", // Large range
       },
-      blocklist: map[string]struct{}{
-        "192.168.1.0/24": {}, // Smaller range within whitelist
-        "10.0.0.0/8":     {}, // Non-overlapping range
+      blocklist: map[string]string{
+        "192.168.1.0/24": "test", // Smaller range within whitelist
+        "10.0.0.0/8":     "test", // Non-overlapping range
       },
       testCase: "CIDR_overlap",
     },
     {
       name: "Exact IP vs CIDR containing it",
-      whitelist: map[string]struct{}{
-        "192.168.1.1": {}, // Exact IP
+      whitelist: map[string]string{
+        "192.168.1.1": "local", // Exact IP
       },
-      blocklist: map[string]struct{}{
-        "192.168.1.0/30": {}, // CIDR containing the whitelisted IP
+      blocklist: map[string]string{
+        "192.168.1.0/30": "test", // CIDR containing the whitelisted IP
       },
       testCase: "IP_vs_CIDR",
     },
     {
       name: "Multiple overlapping whitelist ranges",
-      whitelist: map[string]struct{}{
-        "192.168.0.0/16": {},
-        "192.168.1.0/24": {},
-        "192.168.1.1":    {},
+      whitelist: map[string]string{
+        "192.168.0.0/16": "local",
+        "192.168.1.0/24": "local",
+        "192.168.1.1":    "local",
       },
-      blocklist: map[string]struct{}{
-        "192.168.1.50": {},
+      blocklist: map[string]string{
+        "192.168.1.50": "test",
       },
       testCase: "multiple_whitelist",
     },
