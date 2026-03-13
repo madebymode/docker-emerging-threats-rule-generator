@@ -6,7 +6,7 @@ services:
     environment:
       - DOCKER_HOST_GID=1000
       - RUN_AS_ROOT=true
-    image: mxmd/etr
+    image: mxmd/etr:v2
     build: .
     volumes:
       # our config.json
