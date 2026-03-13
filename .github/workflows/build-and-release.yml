@@ -91,7 +91,6 @@ jobs:
 
             ### Docker Images
             - `${{ env.IMAGE_NAME }}:${{ steps.release_tag.outputs.tag }}`
-            - `${{ env.IMAGE_NAME }}:latest`
 
             ### Docker Multi-Architecture Support
             The Docker image supports:
