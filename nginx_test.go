@@ -16,10 +16,10 @@ func TestNginxConfigFormat(t *testing.T) {
   whitelist := map[string]string{
     "192.168.1.1": "local",
   }
-  blocklist := map[string]string{
-    "10.0.0.1":       "test",
-    "172.16.0.1":     "test",
-    "192.168.2.0/24": "test",
+  blocklist := map[string][]string{
+    "10.0.0.1":       {"test"},
+    "172.16.0.1":     {"test"},
+    "192.168.2.0/24": {"test"},
   }
 
   tmpFile, err := os.CreateTemp("", "nginx-format-*.conf")
@@ -50,7 +50,7 @@ func TestNginxConfigFormat(t *testing.T) {
   // Test 2: Geo directive opening
   geoFound := false
   for _, line := range lines {
-    if strings.Contains(line, "geo $blocked_ip {") {
+    if strings.Contains(line, "geo $blocked_source {") {
       geoFound = true
       break
     }
@@ -59,10 +59,10 @@ func TestNginxConfigFormat(t *testing.T) {
     t.Errorf("Geo directive not found in config")
   }
 
-  // Test 3: Default value
+  // Test 3: Default value (empty string — falsy in nginx)
   defaultFound := false
   for _, line := range lines {
-    if strings.Contains(line, "default        0;") {
+    if strings.Contains(line, `default        "";`) {
       defaultFound = true
       break
     }
@@ -71,8 +71,8 @@ func TestNginxConfigFormat(t *testing.T) {
     t.Errorf("Default value not found in config")
   }
 
-  // Test 4: IP entries format (4 spaces, IP, 4 spaces, "1;")
-  ipPattern := regexp.MustCompile(`^    [\d\./]+    1;$`)
+  // Test 4: IP entries format (4 spaces, IP, 4 spaces, label + ";")
+  ipPattern := regexp.MustCompile(`^    [\d\./]+    [^;]+;$`)
   ipEntryFound := false
   for _, line := range lines {
     if ipPattern.MatchString(line) {
@@ -115,34 +115,34 @@ func TestNginxConfigFormat(t *testing.T) {
 func TestNginxConfigSyntaxValidation(t *testing.T) {
   tests := []struct {
     name        string
-    blocklist   map[string]string
+    blocklist   map[string][]string
     expectValid bool
   }{
     {
       name: "Valid IPv4 addresses",
-      blocklist: map[string]string{
-        "192.168.1.1": "test",
-        "10.0.0.1":    "test",
-        "172.16.0.1":  "test",
+      blocklist: map[string][]string{
+        "192.168.1.1": {"test"},
+        "10.0.0.1":    {"test"},
+        "172.16.0.1":  {"test"},
       },
       expectValid: true,
     },
     {
       name: "Valid CIDR ranges",
-      blocklist: map[string]string{
-        "192.168.1.0/24": "test",
-        "10.0.0.0/8":     "test",
-        "172.16.0.0/16":  "test",
+      blocklist: map[string][]string{
+        "192.168.1.0/24": {"test"},
+        "10.0.0.0/8":     {"test"},
+        "172.16.0.0/16":  {"test"},
       },
       expectValid: true,
     },
     {
       name: "Mixed valid entries",
-      blocklist: map[string]string{
-        "192.168.1.1":    "test",
-        "10.0.0.0/8":     "test",
-        "172.16.0.1":     "test",
-        "203.0.113.0/24": "test",
+      blocklist: map[string][]string{
+        "192.168.1.1":    {"test"},
+        "10.0.0.0/8":     {"test"},
+        "172.16.0.1":     {"test"},
+        "203.0.113.0/24": {"test"},
       },
       expectValid: true,
     },
@@ -196,14 +196,14 @@ func validateNginxGeoSyntax(content string) bool {
     }
 
     // Check geo directive
-    if strings.Contains(line, "geo $blocked_ip {") {
+    if strings.Contains(line, "geo $blocked_source {") {
       hasGeoDirective = true
       inGeoBlock = true
       continue
     }
 
-    // Check default
-    if strings.Contains(line, "default") && strings.Contains(line, "0;") {
+    // Check default (empty string — falsy in nginx)
+    if strings.Contains(line, "default") && strings.HasSuffix(line, ";") {
       hasDefault = true
       continue
     }
@@ -217,9 +217,9 @@ func validateNginxGeoSyntax(content string) bool {
 
     // Validate IP entries format
     if inGeoBlock && !strings.Contains(line, "default") {
-      // Should match pattern: IP/CIDR    1;
+      // Should match pattern: IP/CIDR    <label>;
       parts := strings.Fields(line)
-      if len(parts) != 2 || parts[1] != "1;" {
+      if len(parts) != 2 || !strings.HasSuffix(parts[1], ";") || len(parts[1]) < 2 {
         return false
       }
 
@@ -245,7 +245,7 @@ func isValidIPOrCIDR(s string) bool {
 func TestNginxConfigPerformance(t *testing.T) {
   // Create large datasets
   whitelist := make(map[string]string)
-  blocklist := make(map[string]string)
+  blocklist := make(map[string][]string)
 
   // Add 1000 whitelist entries
   for i := 0; i < 1000; i++ {
@@ -256,7 +256,7 @@ func TestNginxConfigPerformance(t *testing.T) {
   // Add 10000 blocklist entries
   for i := 0; i < 10000; i++ {
     ip := fmt.Sprintf("10.%d.%d.%d", i/65536, (i/256)%256, i%256)
-    blocklist[ip] = "test"
+    blocklist[ip] = []string{"test"}
   }
 
   tmpFile, err := os.CreateTemp("", "nginx-perf-*.conf")
@@ -307,9 +307,9 @@ func TestNginxConfigConcurrency(t *testing.T) {
   whitelist := map[string]string{
     "192.168.1.1": "local",
   }
-  blocklist := map[string]string{
-    "10.0.0.1":   "test",
-    "172.16.0.1": "test",
+  blocklist := map[string][]string{
+    "10.0.0.1":   {"test"},
+    "172.16.0.1": {"test"},
   }
 
   // Start goroutines
@@ -361,10 +361,10 @@ func TestNginxConfigConcurrency(t *testing.T) {
 
 // TestNginxConfigReload tests config file structure for nginx reload compatibility
 func TestNginxConfigReload(t *testing.T) {
-  blocklist := map[string]string{
-    "10.0.0.1":       "test",
-    "172.16.0.1":     "test",
-    "192.168.1.0/24": "test",
+  blocklist := map[string][]string{
+    "10.0.0.1":       {"test"},
+    "172.16.0.1":     {"test"},
+    "192.168.1.0/24": {"test"},
   }
 
   tmpFile, err := os.CreateTemp("", "nginx-reload-*.conf")
@@ -413,13 +413,13 @@ func TestNginxConfigReload(t *testing.T) {
     }
 
     // Geo directive
-    if strings.Contains(line, "geo $blocked_ip {") {
+    if strings.Contains(line, "geo $blocked_source {") {
       geoBlockStarted = true
       continue
     }
 
     // Default value
-    if strings.Contains(line, "default        0;") {
+    if strings.Contains(line, "default") && strings.HasSuffix(strings.TrimSpace(line), ";") {
       if !geoBlockStarted {
         t.Errorf("Line %d: Default found before geo block", lineNum)
       }
@@ -427,19 +427,20 @@ func TestNginxConfigReload(t *testing.T) {
       continue
     }
 
-    // IP entries
-    if strings.Contains(line, "    1;") {
+    // IP entries: lines that start with 4 spaces, end with ";", and aren't the default
+    if strings.HasPrefix(line, "    ") && strings.HasSuffix(line, ";") && !strings.Contains(line, "default") {
       if !geoBlockStarted || !defaultFound {
         t.Errorf("Line %d: IP entry found before geo block properly started", lineNum)
       }
       ipEntriesFound++
 
-      // Validate formatting
+      // Validate formatting: 4-space indent, IP/CIDR, 4-space separator, label + ";"
       if !strings.HasPrefix(line, "    ") {
         t.Errorf("Line %d: IP entry should start with 4 spaces", lineNum)
       }
-      if !strings.HasSuffix(line, "    1;") {
-        t.Errorf("Line %d: IP entry should end with '    1;'", lineNum)
+      parts := strings.Fields(line)
+      if len(parts) != 2 || !strings.HasSuffix(parts[1], ";") {
+        t.Errorf("Line %d: IP entry should be '    <ip>    <label>;', got: %s", lineNum, line)
       }
     }
 
@@ -469,8 +470,8 @@ func TestNginxConfigReload(t *testing.T) {
 
 // TestNginxVariableNaming tests that the nginx variable name is correct
 func TestNginxVariableNaming(t *testing.T) {
-  blocklist := map[string]string{
-    "10.0.0.1": "test",
+  blocklist := map[string][]string{
+    "10.0.0.1": {"test"},
   }
 
   tmpFile, err := os.CreateTemp("", "nginx-var-*.conf")
@@ -493,12 +494,12 @@ func TestNginxVariableNaming(t *testing.T) {
   contentStr := string(content)
 
   // Check for correct variable name
-  if !strings.Contains(contentStr, "geo $blocked_ip") {
-    t.Errorf("Config should use $blocked_ip variable")
+  if !strings.Contains(contentStr, "geo $blocked_source") {
+    t.Errorf("Config should use $blocked_source variable")
   }
 
   // Should not contain other common variable names
-  incorrectVars := []string{"$block_ip", "$blocklist", "$banned_ip", "$deny_ip"}
+  incorrectVars := []string{"$blocked_ip", "$block_ip", "$blocklist", "$banned_ip", "$deny_ip"}
   for _, incorrectVar := range incorrectVars {
     if strings.Contains(contentStr, incorrectVar) {
       t.Errorf("Config should not contain incorrect variable name: %s", incorrectVar)

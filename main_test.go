@@ -192,12 +192,12 @@ func TestBlocklistGeneration(t *testing.T) {
   }
 
   // Sample blocklist with some IPs within the whitelisted ranges
-  blocklist := map[string]string{
-    "45.135.193.100": "test", // Not in any whitelist
-    "216.144.248.20": "test", // Should be whitelisted (in 216.144.248.16/28)
-    "216.245.221.85": "test", // Should be whitelisted (in 216.245.221.80/28)
-    "122.248.234.23": "test", // Exact match in whitelist
-    "192.168.1.1":    "test", // Not in any whitelist
+  blocklist := map[string][]string{
+    "45.135.193.100": {"test"}, // Not in any whitelist
+    "216.144.248.20": {"test"}, // Should be whitelisted (in 216.144.248.16/28)
+    "216.245.221.85": {"test"}, // Should be whitelisted (in 216.245.221.80/28)
+    "122.248.234.23": {"test"}, // Exact match in whitelist
+    "192.168.1.1":    {"test"}, // Not in any whitelist
   }
 
   // Expected results after filtering
@@ -229,17 +229,18 @@ func TestBlocklistGeneration(t *testing.T) {
     t.Fatalf("Failed to read blocklist file: %v", err)
   }
 
-  // Check if the expected IPs are correctly included/excluded
+  // Check if the expected IPs are correctly included/excluded.
+  // Entries are written as "    <ip>    <label>;" so we search for the 4-space-prefixed IP.
   for ip, shouldBeBlocked := range expectedBlocked {
-    ipPattern := fmt.Sprintf("    %s    1;", ip)
+    ipEntry := fmt.Sprintf("    %s    ", ip)
     if shouldBeBlocked {
-      // If IP should be blocked, it should be in the file
-      if !strings.Contains(string(content), ipPattern) {
+      // If IP should be blocked, it should appear as a geo entry
+      if !strings.Contains(string(content), ipEntry) {
         t.Errorf("IP %s should be blocked but wasn't found in the blocklist", ip)
       }
     } else {
-      // If IP should not be blocked, it should not be in the file
-      if strings.Contains(string(content), ipPattern) {
+      // If IP should not be blocked, it should not appear anywhere in the file
+      if strings.Contains(string(content), ip) {
         t.Errorf("IP %s should not be blocked but was found in the blocklist", ip)
       }
     }
@@ -256,8 +257,8 @@ func TestRealWorldWhitelistScenario(t *testing.T) {
   }
 
   // Blocklist with specific IPs that fall within those ranges
-  blocklist := map[string]string{
-    "216.144.248.28": "test", // Falls within 216.144.248.16/28
+  blocklist := map[string][]string{
+    "216.144.248.28": {"test"}, // Falls within 216.144.248.16/28
   }
 
   // Create a temporary file for testing
@@ -287,10 +288,10 @@ func TestRealWorldWhitelistScenario(t *testing.T) {
 
   // Verify the file structure is correct
   fileContent := string(content)
-  if !strings.Contains(fileContent, "geo $blocked_ip") {
+  if !strings.Contains(fileContent, "geo $blocked_source") {
     t.Errorf("Blocklist file doesn't contain expected structure")
   }
-  if !strings.Contains(fileContent, "default        0;") {
+  if !strings.Contains(fileContent, `default        "";`) {
     t.Errorf("Blocklist file doesn't contain expected default value")
   }
 }
@@ -342,8 +343,8 @@ func TestCIDRvsBlocklistCIDR(t *testing.T) {
       whitelist := map[string]string{
         tt.whitelistCIDR: "local",
       }
-      blocklist := map[string]string{
-        tt.blocklistCIDR: "test",
+      blocklist := map[string][]string{
+        tt.blocklistCIDR: {"test"},
       }
 
       // Create a temporary file for testing

@@ -7,7 +7,9 @@ import (
   "io/ioutil"
   "net"
   "net/http"
+  "net/url"
   "os"
+  "path"
   "regexp"
   "sort"
   "strings"
@@ -21,6 +23,62 @@ import (
 
 func logf(format string, args ...interface{}) {
 	fmt.Printf("["+time.Now().Format("2006/01/02 15:04:05")+"] "+format, args...)
+}
+
+// labelFromSource derives a short, human-readable nginx-safe label from a source identifier.
+// Examples:
+//   - "https://raw.githubusercontent.com/stamparm/ipsum/…/levels/8.txt" → "ipsum-8"
+//   - "https://www.ipdeny.com/…/cn-aggregated.zone"                       → "cn"
+//   - "https://rules.emergingthreats.net/…/emerging-Block-IPs.txt"        → "emerging-block-ips"
+//   - "local_blocklist"                                                    → "local"
+func labelFromSource(source string) string {
+	if source == "local_blocklist" || source == "local_whitelist" {
+		return "local"
+	}
+	u, err := url.Parse(source)
+	if err != nil || u.Host == "" {
+		return source
+	}
+	base := path.Base(u.Path)
+	name := strings.TrimSuffix(base, path.Ext(base))
+	name = strings.ToLower(name)
+	// Strip common noisy suffixes (e.g. ipdeny: "cn-aggregated" → "cn")
+	name = strings.TrimSuffix(name, "-aggregated")
+	// For GitHub raw content, prefix with repo name when the filename alone is ambiguous
+	// (e.g. ipsum/levels/8.txt → "ipsum-8" rather than just "8")
+	if u.Host == "raw.githubusercontent.com" {
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		// URL path segments: owner / repo / refs / heads / branch / … / file
+		if len(parts) >= 2 {
+			repo := strings.ToLower(parts[1])
+			if isAmbiguousLabel(name) {
+				name = repo + "-" + name
+			}
+		}
+	}
+	// Fall back to hostname when the path yields nothing useful (e.g. bare domain URLs)
+	if name == "" || name == "." || name == "/" {
+		host := strings.Split(u.Host, ":")[0]
+		name = strings.ToLower(strings.ReplaceAll(host, ".", "-"))
+	}
+	if name == "" {
+		return "blocked"
+	}
+	return name
+}
+
+// isAmbiguousLabel returns true when a label is all-digits or very short,
+// meaning it needs a prefix to be meaningful.
+func isAmbiguousLabel(name string) bool {
+	if len(name) <= 2 {
+		return true
+	}
+	for _, c := range name {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true // all digits
 }
 
 // Config struct includes local and remote IP lists for whitelisting and blocklisting
@@ -272,8 +330,10 @@ func isIPWhitelisted(ip string, whitelist map[string]string) (bool, string, stri
 	return false, "", ""
 }
 
-// writeBlocklistFile creates an NGINX configuration file for blocking IPs, considering whitelisted IPs
-func writeBlocklistFile(whitelist, blocklist map[string]string, filePath string) error {
+// writeBlocklistFile creates an NGINX configuration file for blocking IPs, considering whitelisted IPs.
+// The geo variable $blocked_source is set to a label identifying the originating blocklist(s),
+// or "" (empty string, falsy in nginx) for addresses that are not blocked.
+func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]string, filePath string) error {
 	file, err := os.Create(filePath)
 	if err != nil {
 		return err
@@ -286,13 +346,26 @@ func writeBlocklistFile(whitelist, blocklist map[string]string, filePath string)
 	}(file)
 
 	writer := bufio.NewWriter(file)
-	_, err = writer.WriteString("# blocklist.conf\n\ngeo $blocked_ip {\n    default        0;\n\n")
+	_, err = writer.WriteString("# blocklist.conf\n\ngeo $blocked_source {\n    default        \"\";\n\n")
 	if err != nil {
 		return err
 	}
 
-	var addresses []string
-	for address, blocklistSource := range blocklist {
+	type addrEntry struct {
+		addr  string
+		label string
+	}
+	var entries []addrEntry
+
+	for address, blocklistSources := range blocklist {
+		// Derive the nginx label: join all source labels with "+"
+		labels := make([]string, len(blocklistSources))
+		for i, src := range blocklistSources {
+			labels[i] = labelFromSource(src)
+		}
+		blocklistLabel := strings.Join(labels, "+")
+
+	
 		// Parse blocklist entry as a network (single IPs become /32)
 		var baseNet *net.IPNet
 		if ip := net.ParseIP(address); ip != nil {
@@ -339,26 +412,28 @@ func writeBlocklistFile(whitelist, blocklist map[string]string, filePath string)
 			// Entirely whitelisted
 			if whitelisted, matchedEntry, whitelistSource := isIPWhitelisted(address, whitelist); whitelisted {
 				logf("Skipping whitelisted IP: %s (matched: %s from %s) - found in blocklist: %s\n",
-					address, matchedEntry, whitelistSource, blocklistSource)
+					address, matchedEntry, whitelistSource, blocklistLabel)
 			} else {
-				logf("Skipping whitelisted IP: %s - found in blocklist: %s\n", address, blocklistSource)
+				logf("Skipping whitelisted IP: %s - found in blocklist: %s\n", address, blocklistLabel)
 			}
 		} else if len(remaining) == 1 && remaining[0].String() == baseNet.String() {
 			// No whitelist overlap; keep original entry as-is
-			addresses = append(addresses, address)
+			entries = append(entries, addrEntry{addr: address, label: blocklistLabel})
 		} else {
 			// Partial overlap: emit carved subnets, omitting whitelisted portions
 			logf("Splitting blocklist CIDR %s (from %s): retaining %d sub-ranges after whitelist exclusions\n",
-				address, blocklistSource, len(remaining))
+				address, blocklistLabel, len(remaining))
 			for _, subnet := range remaining {
-				addresses = append(addresses, subnet.String())
+				entries = append(entries, addrEntry{addr: subnet.String(), label: blocklistLabel})
 			}
 		}
 	}
-	sort.Strings(addresses)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].addr < entries[j].addr
+	})
 
-	for _, address := range addresses {
-		_, err = writer.WriteString(fmt.Sprintf("    %s    1;\n", address))
+	for _, e := range entries {
+		_, err = writer.WriteString(fmt.Sprintf("    %s    %s;\n", e.addr, e.label))
 		if err != nil {
 			return err
 		}
@@ -417,9 +492,9 @@ func main() {
 		}
 	}
 
-	blocklist := make(map[string]string)
+	blocklist := make(map[string][]string)
 	for _, address := range config.LocalBlocklist {
-		blocklist[address] = "local_blocklist"
+		blocklist[address] = append(blocklist[address], "local_blocklist")
 	}
 
 	for _, url := range config.RemoteBlocklists {
@@ -431,7 +506,7 @@ func main() {
 
 		addresses := parseIPAddresses(content)
 		for address := range addresses {
-			blocklist[address] = url
+			blocklist[address] = append(blocklist[address], url)
 		}
 	}
 

@@ -168,7 +168,7 @@ func TestWriteBlocklistFile(t *testing.T) {
   tests := []struct {
     name               string
     whitelist          map[string]string
-    blocklist          map[string]string
+    blocklist          map[string][]string
     expectedContains   []string
     expectedNotContain []string
   }{
@@ -178,21 +178,21 @@ func TestWriteBlocklistFile(t *testing.T) {
         "192.168.1.1": "local",
         "10.0.0.0/8":  "local",
       },
-      blocklist: map[string]string{
-        "192.168.1.1": "test", // Should be filtered out
-        "10.1.2.3":    "test", // Should be filtered out (in 10.0.0.0/8)
-        "172.16.0.1":  "test", // Should be included
-        "8.8.8.8":     "test", // Should be included
+      blocklist: map[string][]string{
+        "192.168.1.1": {"test"}, // Should be filtered out
+        "10.1.2.3":    {"test"}, // Should be filtered out (in 10.0.0.0/8)
+        "172.16.0.1":  {"test"}, // Should be included
+        "8.8.8.8":     {"test"}, // Should be included
       },
       expectedContains: []string{
-        "geo $blocked_ip",
-        "default        0;",
-        "172.16.0.1    1;",
-        "8.8.8.8    1;",
+        "geo $blocked_source",
+        `default        "";`,
+        "172.16.0.1    test;",
+        "8.8.8.8    test;",
       },
       expectedNotContain: []string{
-        "192.168.1.1    1;",
-        "10.1.2.3    1;",
+        "192.168.1.1    test;",
+        "10.1.2.3    test;",
       },
     },
     {
@@ -200,26 +200,26 @@ func TestWriteBlocklistFile(t *testing.T) {
       whitelist: map[string]string{
         "216.144.248.16/28": "local",
       },
-      blocklist: map[string]string{
-        "216.144.248.0/24":  "test", // Larger CIDR overlaps with whitelist, gets filtered
-        "216.144.248.16/30": "test", // Smaller CIDR within whitelist, should be filtered
-        "192.168.0.0/16":    "test", // Should be included
+      blocklist: map[string][]string{
+        "216.144.248.0/24":  {"test"}, // Larger CIDR overlaps with whitelist, gets filtered
+        "216.144.248.16/30": {"test"}, // Smaller CIDR within whitelist, should be filtered
+        "192.168.0.0/16":    {"test"}, // Should be included
       },
       expectedContains: []string{
-        "192.168.0.0/16    1;",
+        "192.168.0.0/16    test;",
       },
       expectedNotContain: []string{
-        "216.144.248.0/24    1;",  // Gets filtered due to overlap
-        "216.144.248.16/30    1;", // Gets filtered due to overlap
+        "216.144.248.0/24    test;",  // Gets filtered due to overlap
+        "216.144.248.16/30    test;", // Gets filtered due to overlap
       },
     },
     {
       name:      "Empty lists",
       whitelist: map[string]string{},
-      blocklist: map[string]string{},
+      blocklist: map[string][]string{},
       expectedContains: []string{
-        "geo $blocked_ip",
-        "default        0;",
+        "geo $blocked_source",
+        `default        "";`,
       },
       expectedNotContain: []string{},
     },
@@ -314,12 +314,12 @@ func TestBlocklistIntegration(t *testing.T) {
   }
 
   // 2. Build blocklist
-  blocklist := make(map[string]string)
+  blocklist := make(map[string][]string)
 
   // Add local blocklist entries
   localBlocklist := []string{"203.0.113.1"}
   for _, ip := range localBlocklist {
-    blocklist[ip] = "local_blocklist"
+    blocklist[ip] = append(blocklist[ip], "local_blocklist")
   }
 
   // Add remote blocklist entries
@@ -329,7 +329,7 @@ func TestBlocklistIntegration(t *testing.T) {
   }
   blocklistAddresses := parseIPAddresses(blocklistContent)
   for address := range blocklistAddresses {
-    blocklist[address] = blocklistServer.URL
+    blocklist[address] = append(blocklist[address], blocklistServer.URL)
   }
 
   // 3. Generate nginx config
@@ -353,11 +353,11 @@ func TestBlocklistIntegration(t *testing.T) {
 
   contentStr := string(content)
 
-  // Should be blocked (not in whitelist)
+  // Should be blocked (not in whitelist) — check for the 4-space-prefixed geo entry
   expectedBlocked := []string{"172.16.0.1", "8.8.8.8", "203.0.113.1"}
   for _, ip := range expectedBlocked {
-    pattern := fmt.Sprintf("    %s    1;", ip)
-    if !strings.Contains(contentStr, pattern) {
+    entry := fmt.Sprintf("    %s    ", ip)
+    if !strings.Contains(contentStr, entry) {
       t.Errorf("IP %s should be blocked but not found in config", ip)
     }
   }
@@ -365,8 +365,7 @@ func TestBlocklistIntegration(t *testing.T) {
   // Should NOT be blocked (whitelisted)
   expectedWhitelisted := []string{"192.168.1.100", "10.0.0.1", "172.16.1.1"}
   for _, ip := range expectedWhitelisted {
-    pattern := fmt.Sprintf("    %s    1;", ip)
-    if strings.Contains(contentStr, pattern) {
+    if strings.Contains(contentStr, ip) {
       t.Errorf("IP %s should be whitelisted but found in blocklist config", ip)
     }
   }
@@ -377,7 +376,7 @@ func TestBlocklistEdgeCases(t *testing.T) {
   tests := []struct {
     name      string
     whitelist map[string]string
-    blocklist map[string]string
+    blocklist map[string][]string
     testCase  string
   }{
     {
@@ -385,9 +384,9 @@ func TestBlocklistEdgeCases(t *testing.T) {
       whitelist: map[string]string{
         "192.168.0.0/16": "local", // Large range
       },
-      blocklist: map[string]string{
-        "192.168.1.0/24": "test", // Smaller range within whitelist
-        "10.0.0.0/8":     "test", // Non-overlapping range
+      blocklist: map[string][]string{
+        "192.168.1.0/24": {"test"}, // Smaller range within whitelist
+        "10.0.0.0/8":     {"test"}, // Non-overlapping range
       },
       testCase: "CIDR_overlap",
     },
@@ -396,8 +395,8 @@ func TestBlocklistEdgeCases(t *testing.T) {
       whitelist: map[string]string{
         "192.168.1.1": "local", // Exact IP
       },
-      blocklist: map[string]string{
-        "192.168.1.0/30": "test", // CIDR containing the whitelisted IP
+      blocklist: map[string][]string{
+        "192.168.1.0/30": {"test"}, // CIDR containing the whitelisted IP
       },
       testCase: "IP_vs_CIDR",
     },
@@ -408,8 +407,8 @@ func TestBlocklistEdgeCases(t *testing.T) {
         "192.168.1.0/24": "local",
         "192.168.1.1":    "local",
       },
-      blocklist: map[string]string{
-        "192.168.1.50": "test",
+      blocklist: map[string][]string{
+        "192.168.1.50": {"test"},
       },
       testCase: "multiple_whitelist",
     },
@@ -436,10 +435,10 @@ func TestBlocklistEdgeCases(t *testing.T) {
 
       // Basic structure validation
       contentStr := string(content)
-      if !strings.Contains(contentStr, "geo $blocked_ip") {
+      if !strings.Contains(contentStr, "geo $blocked_source") {
         t.Errorf("Generated file missing geo directive")
       }
-      if !strings.Contains(contentStr, "default        0;") {
+      if !strings.Contains(contentStr, `default        "";`) {
         t.Errorf("Generated file missing default value")
       }
 
@@ -447,21 +446,21 @@ func TestBlocklistEdgeCases(t *testing.T) {
       switch tt.testCase {
       case "CIDR_overlap":
         // The 192.168.1.0/24 should be filtered out due to whitelist 192.168.0.0/16
-        if strings.Contains(contentStr, "192.168.1.0/24    1;") {
+        if strings.Contains(contentStr, "192.168.1.0/24    test;") {
           t.Errorf("Overlapping CIDR should be whitelisted")
         }
         // The 10.0.0.0/8 should remain
-        if !strings.Contains(contentStr, "10.0.0.0/8    1;") {
+        if !strings.Contains(contentStr, "10.0.0.0/8    test;") {
           t.Errorf("Non-overlapping CIDR should be blocked")
         }
       case "IP_vs_CIDR":
         // The CIDR containing whitelisted IP should be filtered
-        if strings.Contains(contentStr, "192.168.1.0/30    1;") {
+        if strings.Contains(contentStr, "192.168.1.0/30    test;") {
           t.Errorf("CIDR containing whitelisted IP should be filtered")
         }
       case "multiple_whitelist":
         // IP should be whitelisted due to multiple overlapping ranges
-        if strings.Contains(contentStr, "192.168.1.50    1;") {
+        if strings.Contains(contentStr, "192.168.1.50    test;") {
           t.Errorf("IP should be whitelisted by multiple ranges")
         }
       }
@@ -553,8 +552,8 @@ func TestBlocklistCIDRCarving(t *testing.T) {
   whitelist := map[string]string{
     "52.82.128.0/19": "cloudfront",
   }
-  blocklist := map[string]string{
-    "52.80.0.0/14": "cn-aggregated",
+  blocklist := map[string][]string{
+    "52.80.0.0/14": {"cn-aggregated"},
   }
 
   tmpFile, err := os.CreateTemp("", "carving-test-*.conf")
@@ -575,7 +574,7 @@ func TestBlocklistCIDRCarving(t *testing.T) {
   s := string(content)
 
   // The original large CIDR must not appear verbatim (it was split)
-  if strings.Contains(s, "52.80.0.0/14    1;") {
+  if strings.Contains(s, "52.80.0.0/14    cn-aggregated;") {
     t.Error("original blocklist CIDR should be split, not emitted verbatim")
   }
 
@@ -585,7 +584,7 @@ func TestBlocklistCIDRCarving(t *testing.T) {
   }
 
   // At least one carved sub-range should be present to block the non-whitelisted addresses
-  if !strings.Contains(s, "52.80.0.0/15    1;") {
+  if !strings.Contains(s, "52.80.0.0/15    cn-aggregated;") {
     t.Error("carved sub-range 52.80.0.0/15 should be blocked")
   }
 }
