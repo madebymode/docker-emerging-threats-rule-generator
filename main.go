@@ -204,26 +204,27 @@ func isIPInCIDR(ip, cidr string, strictMode ...bool) bool {
 	}
 }
 
-// isIPWhitelisted checks if an IP is whitelisted considering CIDR ranges
-func isIPWhitelisted(ip string, whitelist map[string]struct{}) bool {
+// isIPWhitelisted checks if an IP is whitelisted considering CIDR ranges.
+// Returns (isWhitelisted, matchedEntry, source).
+func isIPWhitelisted(ip string, whitelist map[string]string) (bool, string, string) {
 	// First check for exact match
-	if _, ok := whitelist[ip]; ok {
-		return true
+	if source, ok := whitelist[ip]; ok {
+		return true, ip, source
 	}
 
 	// Then check for CIDR range
-	for cidr := range whitelist {
+	for cidr, source := range whitelist {
 		// Use strict mode for the TestIsIPWhitelisted test to pass
 		if isIPInCIDR(ip, cidr, false) {
-			return true
+			return true, cidr, source
 		}
 	}
 
-	return false
+	return false, "", ""
 }
 
 // writeBlocklistFile creates an NGINX configuration file for blocking IPs, considering whitelisted IPs
-func writeBlocklistFile(whitelist, blocklist map[string]struct{}, filePath string) error {
+func writeBlocklistFile(whitelist, blocklist map[string]string, filePath string) error {
 	file, err := os.Create(filePath)
 	if err != nil {
 		return err
@@ -242,9 +243,9 @@ func writeBlocklistFile(whitelist, blocklist map[string]struct{}, filePath strin
 	}
 
 	var addresses []string
-	for address := range blocklist {
-		if isIPWhitelisted(address, whitelist) {
-			logf("Skipping whitelisted IP: %s\n", address)
+	for address, blocklistSource := range blocklist {
+		if whitelisted, matchedEntry, whitelistSource := isIPWhitelisted(address, whitelist); whitelisted {
+			logf("Skipping whitelisted IP: %s (matched: %s from %s) - found in blocklist: %s\n", address, matchedEntry, whitelistSource, blocklistSource)
 		} else {
 			addresses = append(addresses, address)
 		}
@@ -293,9 +294,9 @@ func main() {
 		return
 	}
 
-	whitelist := make(map[string]struct{})
+	whitelist := make(map[string]string)
 	for _, address := range config.LocalWhitelist {
-		whitelist[address] = struct{}{}
+		whitelist[address] = "local_whitelist"
 	}
 
 	for _, url := range config.RemoteWhitelists {
@@ -307,13 +308,13 @@ func main() {
 
 		addresses := parseIPAddresses(content)
 		for address := range addresses {
-			whitelist[address] = struct{}{}
+			whitelist[address] = url
 		}
 	}
 
-	blocklist := make(map[string]struct{})
+	blocklist := make(map[string]string)
 	for _, address := range config.LocalBlocklist {
-		blocklist[address] = struct{}{}
+		blocklist[address] = "local_blocklist"
 	}
 
 	for _, url := range config.RemoteBlocklists {
@@ -325,7 +326,7 @@ func main() {
 
 		addresses := parseIPAddresses(content)
 		for address := range addresses {
-			blocklist[address] = struct{}{}
+			blocklist[address] = url
 		}
 	}
 
