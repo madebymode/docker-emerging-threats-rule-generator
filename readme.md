@@ -220,6 +220,42 @@ The app writes a `geo $blocked_source { ... }` block into `blocklist.conf`. For 
 `$blocked_source` is set to a label identifying which blocklist(s) it came from (e.g. `ipsum-4`, `compromised-ips`, or
 `ipsum-4+compromised-ips` when an IP appears in multiple lists). For all other IPs it is `""` (empty / falsy).
 
+### Performance
+
+Nginx's [`ngx_http_geo_module`](http://nginx.org/en/docs/http/ngx_http_geo_module.html) builds a **binary trie** (a
+32-bit radix tree for IPv4) from `blocklist.conf` at startup. The official documentation is explicit about the
+per-request cost:
+
+> "Since variables are evaluated only when used, the mere existence of even a large number of declared 'geo' variables
+> does not cause any extra costs for request processing."
+
+When `$blocked_source` is referenced (as in the `if ($blocked_source)` check), nginx performs a single trie traversal:
+at most **32 pointer-follow steps** for any IPv4 address regardless of how many entries the blocklist contains. A
+100,000-entry list costs exactly the same to query as a 10-entry list.
+
+**Memory**
+
+Each internal trie node is 32 bytes on a 64-bit system — four `uintptr_t` fields (`left`, `right`, `parent`, `value`)
+as defined in [`ngx_radix_node_t`](https://github.com/nginx/nginx/blob/master/src/http/modules/ngx_http_geo_module.c).
+A `/32` host entry can require up to 32 nodes in the worst case (one per bit, no shared prefix). For 100,000 `/32`
+entries with no shared prefixes that is at most ~100 MB. Real-world blocklists share large prefix ranges so actual
+usage is substantially lower. CIDR entries with shorter prefixes (e.g. `/24`) use fewer nodes and cover more
+addresses.
+
+**vs. `allow`/`deny`**
+
+The `allow`/`deny` directives evaluate rules sequentially — O(n) per request. The `geo` module is O(32) regardless of
+list size. The official docs note this distinction when recommending `geo` for large datasets.
+
+**Reload cost**
+
+The trie is rebuilt from text on every nginx restart or reload — this is the operationally meaningful cost, not
+per-request lookup. The official docs recommend:
+
+> "To speed up loading of a geo base, addresses should be put in ascending order."
+
+This project already sorts entries in ascending order before writing `blocklist.conf`.
+
 ### `/check_ip` endpoint
 
 `default.conf` exposes a single location used as a Traefik `forwardAuth` target:
