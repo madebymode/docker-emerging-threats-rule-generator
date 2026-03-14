@@ -43,7 +43,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern=v{{major}}
             type=ref,event=branch
-            type=raw,value={{date 'YYYY-MM-DD-HHmmss'}},enable=${{ github.ref_type == 'branch' }}
+            type=raw,value=v1-{{date 'YYYY-MM-DD-HHmmss'}},enable=${{ github.ref_type == 'branch' }}
             type=raw,value=latest
 
       - name: Set up QEMU
@@ -78,7 +78,7 @@ jobs:
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             TAG="${{ github.ref_name }}"
           else
-            TAG="v$(date +'%Y-%m-%d-%H%M%S')"
+            TAG="v1-$(date +'%Y-%m-%d-%H%M%S')"
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Generated release tag: $TAG"
