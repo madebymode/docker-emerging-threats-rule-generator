@@ -8,19 +8,34 @@ Docker Hub: https://hub.docker.com/r/mxmd/etr
 
 ## How It Works
 
+**Allowed — 200 OK**
+
 ```
-                    ┌──────────────────────────────────────┐
-                    │  emerging-threats-rules (daily cron) │
-                    │  Downloads IP lists → blocklist.conf  │
-                    └─────────────────┬────────────────────┘
-                                      │ shared volume
-┌────────┐  request  ┌─────────┐  forwardAuth  ┌──────────────────────┐
-│ Client │ ────────► │ Traefik │ ────────────► │ nginx /check_ip      │
-└────────┘           └─────────┘               │  geo radix lookup    │
-                          │                    └──────────┬───────────┘
-                     200 OK                               │ 403
-                          ▼                               ▼
-                       Your App                        Dropped
+                    ┌────────────────────────────────┐
+                    │  etr (daily cron)              │
+                    │  IP lists → blocklist.conf     │
+                    └───────────────┬────────────────┘
+                                    │ shared volume
+                                    ▼
+ Client           Traefik        nginx /check_ip        app
+   │                 │                  │                 │
+   ├── request ─────►│                  │                 │
+   │                 ├── forwardAuth ──►│                 │
+   │                 │◄─── 200 OK ──────┤                 │
+   │                 ├──────────────────────── forward ──►│
+   │                 │◄─────────────────────── response ──┤
+   │◄── response ────┤                  │                 │
+```
+
+**Blocked — 403**
+
+```
+ Client           Traefik        nginx /check_ip
+   │                 │                  │
+   ├── request ─────►│                  │
+   │                 ├── forwardAuth ──►│
+   │                 │◄─── 403 ─────────┤  ← blocked IP or empty User-Agent
+   │◄── 403 ─────────┤                  │
 ```
 
 1. `emerging-threats-rules` fetches the configured IP/CIDR lists once a day, merges and de-duplicates them, sorts them in ascending order, and writes `blocklist.conf` to a shared Docker volume.
