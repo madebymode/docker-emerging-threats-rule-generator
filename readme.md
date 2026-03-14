@@ -326,6 +326,20 @@ Adjust `set_real_ip_from` to match your internal network if you use a different 
 
 ---
 
+## Examples
+
+Alternative configurations for setups that don't use Traefik:
+
+| Example | Description |
+|---|---|
+| [`examples/traefik-v2/`](examples/traefik-v2/) | Traefik v2 with `forwardAuth` to the nginx checker |
+| [`examples/traefik-v3/`](examples/traefik-v3/) | Traefik v3 — same pattern; notes HTTP/3 opt-in and API changes |
+| [`examples/caddy/`](examples/caddy/) | Caddy `forward_auth` to the nginx checker (Caddy sends identical `X-Forwarded-*` headers) |
+| [`examples/nginx-reverse-proxy/`](examples/nginx-reverse-proxy/) | nginx is both edge proxy and blocker — geo check inline before `proxy_pass`, no separate forwardAuth hop |
+| [`examples/pfsense/`](examples/pfsense/) | pfSense HAProxy as edge → nginx inline blocking → app; includes HAProxy configuration steps |
+
+---
+
 ## Related Docs
 
 - [reporting.md](reporting.md) — Query and analyze blocked request logs with `jq`

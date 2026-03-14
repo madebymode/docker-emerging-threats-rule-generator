@@ -1,0 +1,95 @@
+version: '3'
+
+# Example: Traefik v3 with forwardAuth to the nginx IP checker.
+# The forwardAuth middleware syntax is unchanged from v2. Key v3 differences:
+#
+#   - Native HTTP/3 (QUIC) on websecure — opt-in via commented flags below.
+#   - --api.insecure removed; use a secure dashboard router or omit the dashboard.
+#   - --providers.docker.defaultRule syntax updated (affects custom setups, not this one).
+#   - forwardAuth gains addAuthCookiesToResponse option (not needed here).
+#
+# The etr-blocklist middleware is defined once on the Traefik container.
+# Apply it to any service by adding a label to that service:
+#   traefik.http.routers.<name>.middlewares=etr-blocklist@docker
+#
+# Usage:
+#   1. Create the shared network:   docker network create traefik-public
+#   2. Set DOCKER_HOST_GID:         grep docker /etc/group | cut -d: -f3
+#   3. docker compose up
+
+services:
+  traefik:
+    image: traefik:v3
+    container_name: traefik
+    restart: always
+    command:
+      - "--log.level=INFO"
+      - "--ping=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=traefik-public"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Redirect all HTTP → HTTPS.
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--accesslog=true"
+      # --- HTTP/3 (QUIC) — v3 only ---
+      # Requires the UDP 443 port binding below.
+      # - "--entrypoints.websecure.http3=true"
+      # --- Optional: Let's Encrypt TLS ---
+      # - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      # - "--certificatesresolvers.letsencrypt.acme.email=you@example.com"
+      # - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    ports:
+      - "80:80"
+      - "443:443"
+      # Uncomment for HTTP/3:
+      # - "443:443/udp"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # - letsencrypt:/letsencrypt   # uncomment when using Let's Encrypt
+    labels:
+      - "traefik.enable=true"
+      # Define the middleware once here on the Traefik container.
+      - "traefik.http.middlewares.etr-blocklist.forwardauth.address=http://etr-blocker-nginx/check_ip"
+    networks:
+      - traefik-public
+
+  etr-downloader:
+    image: mxmd/etr:v2
+    restart: always
+    environment:
+      - DOCKER_HOST_GID=1003   # grep docker /etc/group | cut -d: -f3
+      - RUN_AS_ROOT=false
+      - RESTART_CONTAINERS=true
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - nginx-blocking-rules:/app/nginx/conf/
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  etr-blocker-nginx:
+    container_name: etr-blocker-nginx
+    depends_on:
+      - etr-downloader
+    image: nginx:alpine
+    restart: always
+    volumes:
+      - "nginx-blocking-rules:/etc/nginx/conf.d/"
+      - "./nginx/default.conf:/etc/nginx/conf.d/default.conf"
+    networks:
+      - traefik-public
+
+volumes:
+  nginx-blocking-rules:
+  # letsencrypt:   # uncomment when using Let's Encrypt
+
+networks:
+  traefik-public:
+    external: true   # create once with: docker network create traefik-public

@@ -1,0 +1,48 @@
+version: '3'
+
+# Example: pfSense HAProxy as the edge, nginx as the Docker-side proxy + IP blocker.
+#
+# Traffic flow:
+#   Internet → pfSense HAProxy → this nginx container → your app
+#
+# pfSense HAProxy adds X-Forwarded-For with the real client IP. nginx is
+# configured to trust pfSense's LAN interface IP so that $remote_addr (and
+# therefore the geo blocklist lookup) reflects the actual client, not pfSense.
+#
+# See README.md for pfSense HAProxy configuration steps.
+#
+# Usage:
+#   1. Set DOCKER_HOST_GID:   grep docker /etc/group | cut -d: -f3
+#   2. Edit nginx/default.conf — update set_real_ip_from to your pfSense LAN IP
+#      and update the upstream block to point at your application
+#   3. docker compose up
+
+services:
+  etr-downloader:
+    image: mxmd/etr:v2
+    environment:
+      - DOCKER_HOST_GID=1003   # grep docker /etc/group | cut -d: -f3
+      - RUN_AS_ROOT=false
+      - RESTART_CONTAINERS=true
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - nginx-blocking-rules:/app/nginx/conf/
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  nginx:
+    container_name: etr-nginx-proxy
+    depends_on:
+      - etr-downloader
+    image: nginx:alpine
+    ports:
+      # Bind to the Docker host interface that pfSense HAProxy targets.
+      # Change 127.0.0.1 to your Docker host's LAN IP if HAProxy runs on pfSense
+      # (a separate machine). Leave as 127.0.0.1 if pfSense is on the same host
+      # running HAProxy in a VM/jail that reaches the host loopback.
+      - "127.0.0.1:8080:80"
+    volumes:
+      - "nginx-blocking-rules:/etc/nginx/conf.d/"
+      - "./nginx/default.conf:/etc/nginx/conf.d/default.conf"
+
+volumes:
+  nginx-blocking-rules:
