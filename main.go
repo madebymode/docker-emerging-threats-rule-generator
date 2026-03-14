@@ -516,6 +516,12 @@ func main() {
 		return
 	}
 
+	if os.Getenv("RESTART_CONTAINERS") == "false" {
+		logf("RESTART_CONTAINERS=false: skipping container restart. Reload nginx via external cron or orchestrator.\n")
+		logf("Blocklist.conf file created successfully.\n")
+		return
+	}
+
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		logf("Failed to create Docker client: %v\n", err)
