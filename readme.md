@@ -13,6 +13,12 @@ The nginx container(s) exposes a single `/check_ip` endpoint used as a
 forwards to your services first hits `/check_ip`; blocked IPs and empty User-Agents get a `403` and are dropped before
 they reach your app.
 
+The overhead of adding this forwardAuth check is negligible. Nginx's `geo` module stores the blocklist as a radix tree
+and evaluates it in **O(32) — at most 32 pointer-follows** for any IPv4 address, regardless of how many IPs are in the
+list. A 100,000-entry blocklist costs the same to query as a 10-entry one. Memory usage is typically a few MB for
+real-world lists (worst-case ~100 MB for 100 k entries with no shared prefixes). Added latency per request is
+sub-millisecond — the forwardAuth hop is a loopback call to a local container serving a pure in-memory lookup.
+
 ---
 
 ## Quick Start
@@ -308,6 +314,13 @@ proxy's container IP. This tells nginx to trust `X-Forwarded-For` from the entir
 (the last hop), which is often another trusted proxy rather than the actual client. With `real_ip_recursive on`, nginx
 walks the list from right to left and skips addresses that match `set_real_ip_from`, stopping at the first
 non-trusted address — which is the real client IP.
+
+> **CPU note:** `real_ip_recursive on` walks the entire `X-Forwarded-For` chain on every request. A client (or
+> attacker) can send an arbitrarily long `X-Forwarded-For` header, forcing nginx to iterate through every entry before
+> it finds the real IP. Under high request volume with long XFF chains this linear scan can become a meaningful CPU
+> cost. Nginx's `large_client_header_buffers` directive bounds the maximum header size (default 8 KB across 4 buffers),
+> which limits the worst case, but if you are seeing elevated CPU on the `etr-blocker-nginx` container consider
+> lowering that limit or stripping/truncating `X-Forwarded-For` at the Traefik layer before the forwardAuth hop.
 
 Adjust `set_real_ip_from` to match your internal network if you use a different subnet.
 
