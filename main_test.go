@@ -8,6 +8,20 @@ import (
   "testing"
 )
 
+// TestMain configures package-level security variables for the test environment:
+//   - allowedConfDir is set to the OS temp directory so tests can call
+//     writeBlocklistFile with os.CreateTemp paths without triggering the
+//     path-traversal guard that restricts production writes to /app/nginx/conf.
+//   - validateURLFunc is replaced with a no-op so tests can reach mock HTTP
+//     servers (httptest.NewServer) without being blocked by the https-only /
+//     private-IP SSRF guards. Tests that specifically exercise URL validation
+//     should call validateURL directly rather than going through downloadFile.
+func TestMain(m *testing.M) {
+  allowedConfDir = os.TempDir()
+  validateURLFunc = func(string) error { return nil }
+  os.Exit(m.Run())
+}
+
 // TestCIDRHandling tests the isIPInCIDR function with various scenarios
 func TestCIDRHandling(t *testing.T) {
   tests := []struct {
