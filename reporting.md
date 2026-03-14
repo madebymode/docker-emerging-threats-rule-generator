@@ -24,6 +24,38 @@ All examples below use `docker logs <container>` — substitute with the compose
 
 ---
 
+## Live / Streaming Logs
+
+To watch blocked requests in real time, use `jq -R --unbuffered` (processes one line as it arrives instead of
+buffering the whole stream).
+
+Docker Compose adds a `service-name | ` prefix to every log line. Strip it with `awk '{print $NF}'` before piping to
+`jq`. `stdbuf -oL` forces line-buffered output so nothing sits in awk's buffer:
+
+```bash
+docker-compose -f /path/to/docker-compose.yml logs etr-blocker-nginx -f 2>&1 \
+  | stdbuf -oL awk '{print $NF}' \
+  | jq -R --unbuffered 'try fromjson | select(type == "object")'
+```
+
+Or with Compose v2's `--no-log-prefix` flag (skips the awk step):
+
+```bash
+docker compose logs etr-blocker-nginx --no-log-prefix -f 2>&1 \
+  | jq -R --unbuffered 'try fromjson | select(type == "object")'
+```
+
+> `--no-log-prefix` is a Compose v2 flag and may not be available in all CI environments or older installs. The
+> `stdbuf -oL awk '{print $NF}'` approach works universally.
+
+Each blocked request prints as it happens:
+
+```json
+{"ip":"1.2.3.4","time":"2026-03-14T14:44:54+00:00","method":"GET","url":"https://example.com/secret","status":403,"blocked_source":"ipsum-4","blocked_ua":""}
+```
+
+---
+
 ## Queries
 
 ### Count total blocked requests
