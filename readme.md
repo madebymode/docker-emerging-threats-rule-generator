@@ -1,4 +1,8 @@
-# Emerging Threat Rules for Nginx
+# Emerging Threat Rules for Nginx — v1 (Legacy)
+
+> **This is the v1 legacy branch.** v1 is no longer actively developed. For new deployments, use [v2](https://github.com/mxmd/docker-emerging-threats-rule-generator/tree/master) which provides per-source labeling, user-agent blocking, and structured access logs.
+>
+> **Compatibility note:** The `$blocked_ip` variable used by v1's generated `blocklist.conf` and `nginx/default.conf` is **not compatible with v2**. v2 generates a different blocklist format using `$blocked_source` (a labeled geo variable). Do not mix v1 config files with a v2 image or vice versa.
 
 Docker Hub:
 
@@ -34,6 +38,41 @@ the `blocklist.conf` file. Here is a template for the `config.json`:
 
 Adjust the `block_lists` array with the URLs of your chosen emerging threat lists and set the `nginx_conf_file_path` to
 the desired path within your Nginx container.
+
+## How the Nginx Blocklist Works (v1)
+
+v1 generates a `blocklist.conf` using nginx's [`geo` module](https://nginx.org/en/docs/http/ngx_http_geo_module.html). The file looks like this:
+
+```nginx
+# blocklist.conf
+
+geo $blocked_ip {
+    default        0;
+
+    1.2.3.4        1;
+    5.6.7.0/24     1;
+    ...
+}
+```
+
+The `$blocked_ip` variable is `1` for any request whose `$remote_addr` (or real IP via `set_real_ip_from`) matches a listed address, and `0` otherwise. The included `nginx/default.conf` checks this variable on the `/check_ip` endpoint:
+
+```nginx
+server {
+    listen 80;
+
+    location /check_ip {
+        if ($blocked_ip) {
+            return 403;
+        }
+        return 200 "OK";
+    }
+}
+real_ip_header      X-Forwarded-For;
+set_real_ip_from 172.0.0.0/8;
+```
+
+> **v2 incompatibility:** v2 replaces `$blocked_ip` with `$blocked_source`, a labeled geo variable that identifies which blocklist matched. v1's `blocklist.conf` and `nginx/default.conf` will not work with a v2 image — they use a different variable name and file format.
 
 ## Using with Nginx
 
