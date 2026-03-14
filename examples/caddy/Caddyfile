@@ -1,0 +1,16 @@
+# Replace example.com with your domain.
+# Replace your-app:3000 with your application's container address.
+#
+# forward_auth sends every request to /check_ip on the nginx IP checker before
+# proxying. A 403 response short-circuits the request — your app never sees it.
+#
+# Caddy handles TLS automatically (Let's Encrypt / ZeroSSL) when a real domain
+# is used. For local testing, replace the domain with ":80" to disable TLS.
+
+example.com {
+    forward_auth etr-blocker-nginx:80 {
+        uri /check_ip
+    }
+
+    reverse_proxy your-app:3000
+}

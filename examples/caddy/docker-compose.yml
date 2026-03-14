@@ -1,0 +1,53 @@
+version: '3'
+
+# Example: Caddy as the reverse proxy with forward_auth to the nginx IP checker.
+# Caddy's forward_auth directive sends every request to /check_ip on the nginx
+# container before proxying. Blocked IPs and empty User-Agents get a 403 before
+# the request ever reaches your application.
+#
+# Caddy sends X-Forwarded-For, X-Forwarded-Method, X-Forwarded-Host, and
+# X-Forwarded-Uri on forward_auth subrequests — the same headers as Traefik —
+# so the nginx/default.conf here is compatible with both.
+#
+# Usage:
+#   1. Set DOCKER_HOST_GID: grep docker /etc/group | cut -d: -f3
+#   2. Edit Caddyfile — replace example.com and your-app:3000
+#   3. docker compose up
+
+services:
+  etr-downloader:
+    image: mxmd/etr:v2
+    environment:
+      - DOCKER_HOST_GID=1003   # grep docker /etc/group | cut -d: -f3
+      - RUN_AS_ROOT=false
+      - RESTART_CONTAINERS=true
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - nginx-blocking-rules:/app/nginx/conf/
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  etr-blocker-nginx:
+    container_name: etr-blocker-nginx
+    depends_on:
+      - etr-downloader
+    image: nginx:alpine
+    volumes:
+      - "nginx-blocking-rules:/etc/nginx/conf.d/"
+      - "./nginx/default.conf:/etc/nginx/conf.d/default.conf"
+
+  caddy:
+    image: caddy:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - etr-blocker-nginx
+
+volumes:
+  nginx-blocking-rules:
+  caddy_data:
+  caddy_config:
