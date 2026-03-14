@@ -41,6 +41,14 @@ To apply the generated `blocklist.conf` in Nginx, mount the named volume (`nginx
 `nginx_blacklist` container to your Nginx container. This setup allows Nginx to use the updated blocklist without manual
 intervention.
 
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `DOCKER_HOST_GID` | _(unset)_ | GID of the `docker` group on the host. Required when using the Docker socket so the container user can access it. Find it with `grep docker /etc/group \| cut -d: -f3`. |
+| `RUN_AS_ROOT` | `false` | Run the rule generator as root instead of the `anubis` user. Only needed in debugging scenarios or when the host docker GID conflicts with Alpine's reserved range. |
+| `RESTART_CONTAINERS` | `true` | When `true` (default), uses the mounted Docker socket to restart the nginx containers listed in `config.json` after updating the blocklist. Set to `false` to skip all Docker socket access — the container will only write `blocklist.conf` and exit. The `docker.sock` volume mount can be omitted entirely in this mode. Use an external cron job or your orchestrator's reload mechanism to pick up the updated file. |
+
 ## Docker Compose
 
 For ease of deployment, a `docker-compose.yml` file is provided. It orchestrates both the `nginx_blacklist` application
