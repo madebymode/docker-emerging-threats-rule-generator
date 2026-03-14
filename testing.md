@@ -64,8 +64,8 @@ curl -s -A "" \
 ```
 
 Expected log line:
-```
-127.0.0.1 - [14/Mar/2026:12:00:00 +0000] "GET https://myapp.example.com/admin/login" 403 blocked_by="empty-ua"
+```json
+{"ip":"127.0.0.1","time":"2026-03-14T12:00:00+00:00","method":"GET","url":"https://myapp.example.com/admin/login","status":403,"blocked_source":"","blocked_ua":"empty-ua"}
 ```
 
 > Only non-200 responses are logged (controlled by the `$loggable` map in `default.conf`).
@@ -87,8 +87,8 @@ curl -s \
 ```
 
 Expected log line (if `1.2.3.4` is in the blocklist):
-```
-1.2.3.4 - [14/Mar/2026:12:00:00 +0000] "GET https://myapp.example.com/secret" 403 blocked_by="<blocklist-label>"
+```json
+{"ip":"1.2.3.4","time":"2026-03-14T12:00:00+00:00","method":"GET","url":"https://myapp.example.com/secret","status":403,"blocked_source":"<blocklist-label>","blocked_ua":""}
 ```
 
 **Verify an IP is in the generated blocklist:**
@@ -115,4 +115,4 @@ docker logs -f <nginx-container-name>
 | IP matched in `blocklist.conf` geo block | `$blocked_source = "<label>"` | 403 |
 | Neither | both empty/falsy | 200 OK |
 
-The `blocked_by=` field in the log will contain whichever variable was non-empty. Empty UA is checked first.
+The `blocked_source` field contains the blocklist label (e.g. `ipsum-4`) and `blocked_ua` contains `empty-ua` when the User-Agent was missing. Only one will be non-empty per request — empty UA is checked first.

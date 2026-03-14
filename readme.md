@@ -70,18 +70,27 @@ The app writes a `geo $blocked_source { ... }` block into `blocklist.conf`. For 
 
 ### Custom log format
 
+Logs are emitted as JSON for easy ingestion by Datadog (or any structured log pipeline):
+
 ```nginx
-log_format blocklist '$remote_addr - [$time_local] "$http_x_forwarded_method $http_x_forwarded_proto://$http_x_forwarded_host$http_x_forwarded_uri" $status blocked_by="$blocked_source$blocked_ua"';
+log_format blocklist escape=json
+    '{"ip":"$remote_addr",'
+     '"time":"$time_iso8601",'
+     '"method":"$display_method",'
+     '"url":"$display_url",'
+     '"status":$status,'
+     '"blocked_source":"$blocked_source",'
+     '"blocked_ua":"$blocked_ua"}';
 ```
 
 Only blocked requests (non-200) are written to the log. Allowed requests produce no log entry.
 
-`X-Forwarded-Method`, `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Uri` are combined to reconstruct the full client-facing request — replacing the `GET /check_ip HTTP/1.1` forwardAuth internal request that nginx would otherwise log. The `blocked_by` field is a `+`-joined label of every blocklist the IP appeared in, or `empty-ua` for requests blocked by missing User-Agent.
+`X-Forwarded-Method`, `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Uri` are used to reconstruct the real client-facing `method` and `url` — replacing the `GET /check_ip HTTP/1.1` forwardAuth internal request that nginx would otherwise log. When those headers are absent (direct requests, health checks), nginx falls back to its native `$request_method` and `$request_uri`. `blocked_source` is a `+`-joined label of every blocklist the IP appeared in. `blocked_ua` is `empty-ua` for requests blocked by missing User-Agent, otherwise empty.
 
 Example — an IP that appeared in three ipsum blocklist tiers:
 
-```
-etr-blocker-nginx-1  | 1.2.3.4 - [14/Mar/2026:14:44:54 +0000] "GET https://example.com/api/v1/secret" 403 blocked_by="ipsum-4+ipsum-3+ipsum-2"
+```json
+{"ip":"1.2.3.4","time":"2026-03-14T14:44:54+00:00","method":"GET","url":"https://example.com/api/v1/secret","status":403,"blocked_source":"ipsum-4+ipsum-3+ipsum-2","blocked_ua":""}
 ```
 
 ### Real IP trust
