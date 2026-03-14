@@ -70,7 +70,9 @@ func TestParseIPAddresses(t *testing.T) {
                 192.168.1
                 not.an.ip.address
                 192.168.1.1`,
-      expected: []string{"999.999.999.999", "192.168.1.1"},
+      // 999.999.999.999 is now correctly rejected by net.ParseIP validation;
+      // only the valid IP survives.
+      expected: []string{"192.168.1.1"},
     },
   }
 

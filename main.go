@@ -2,27 +2,142 @@ package main
 
 import (
   "bufio"
+  "context"
   "encoding/json"
   "fmt"
-  "io/ioutil"
+  "io"
   "net"
   "net/http"
   "net/url"
   "os"
   "path"
+  "path/filepath"
   "regexp"
   "sort"
   "strings"
   "time"
 
   "github.com/docker/docker/api/types/container"
-
   "github.com/docker/docker/client"
-  "golang.org/x/net/context"
 )
 
 func logf(format string, args ...interface{}) {
 	fmt.Printf("["+time.Now().Format("2006/01/02 15:04:05")+"] "+format, args...)
+}
+
+// allowedConfDir is the only directory the blocklist file may be written into.
+// Declared as a var so tests can override it to a temp directory.
+var allowedConfDir = "/app/nginx/conf"
+
+// Security constants
+const (
+	// httpTimeout caps each remote blocklist download.
+	httpTimeout = 30 * time.Second
+	// maxResponseSize caps how much data we read from a single remote URL (50 MB).
+	maxResponseSize = 50 * 1024 * 1024
+	// dockerOpTimeout caps each individual Docker stop/start call.
+	dockerOpTimeout = 60 * time.Second
+)
+
+// httpClient is a shared client with a hard timeout; the zero-value http.Client has no timeout.
+var httpClient = &http.Client{Timeout: httpTimeout}
+
+// validContainerName matches Docker container names: starts with alphanumeric, then allows
+// alphanumeric, hyphens, underscores, and periods — no path separators or shell metacharacters.
+var validContainerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+// privateIPNets holds RFC-1918, loopback, link-local, and other reserved ranges used to
+// block SSRF attacks that resolve to internal addresses.
+var privateIPNets []*net.IPNet
+
+func init() {
+	reserved := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"169.254.0.0/16", // link-local
+		"100.64.0.0/10",  // carrier-grade NAT
+		"0.0.0.0/8",
+		"240.0.0.0/4", // reserved
+		"::1/128",
+		"fc00::/7",
+		"fe80::/10",
+	}
+	for _, cidr := range reserved {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err == nil {
+			privateIPNets = append(privateIPNets, ipNet)
+		}
+	}
+}
+
+// isPrivateIP returns true if ip falls within any reserved/private range.
+func isPrivateIP(ip net.IP) bool {
+	for _, ipNet := range privateIPNets {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateURLFunc is the URL validation function used by downloadFile.
+// It is a package-level variable so unit tests can replace it with a no-op to
+// reach mock HTTP servers without triggering the https-only / private-IP guards.
+// Production code always uses the real validateURL implementation.
+var validateURLFunc = validateURL
+
+// validateURL enforces https-only and blocks SSRF via private/reserved IP resolution.
+// Note: DNS rebinding between this check and the actual request is a known residual risk.
+func validateURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %v", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("URL scheme must be https, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("URL has no host")
+	}
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		return fmt.Errorf("cannot resolve host %q: %v", host, err)
+	}
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip != nil && isPrivateIP(ip) {
+			return fmt.Errorf("URL %q resolves to reserved address %s", rawURL, addr)
+		}
+	}
+	return nil
+}
+
+// validateConfFilePath ensures the output path is within the expected directory,
+// preventing path-traversal writes to arbitrary filesystem locations.
+// Both paths are cleaned before comparison so trailing slashes (e.g. macOS $TMPDIR)
+// do not produce a double-separator that defeats the prefix check.
+func validateConfFilePath(filePath string) error {
+	if filePath == "" {
+		return fmt.Errorf("nginx_conf_file_path is empty")
+	}
+	clean := filepath.Clean(filePath)
+	allowedClean := filepath.Clean(allowedConfDir)
+	prefix := allowedClean + string(filepath.Separator)
+	if clean != allowedClean && !strings.HasPrefix(clean, prefix) {
+		return fmt.Errorf("nginx_conf_file_path %q is outside allowed directory %q", filePath, allowedConfDir)
+	}
+	return nil
+}
+
+// validateContainerName rejects names containing shell metacharacters or path separators.
+func validateContainerName(name string) error {
+	if !validContainerName.MatchString(name) {
+		return fmt.Errorf("container name %q contains invalid characters (allowed: [a-zA-Z0-9._-])", name)
+	}
+	return nil
 }
 
 // labelFromSource derives a short, human-readable nginx-safe label from a source identifier.
@@ -114,19 +229,25 @@ func readConfig(filePath string) (*Config, error) {
 	return config, nil
 }
 
-// downloadFile fetches content from a specified URL
-func downloadFile(url string) (string, error) {
-	resp, err := http.Get(url)
+// downloadFile fetches content from a specified URL.
+// URLs must use https and must not resolve to private/reserved addresses (SSRF prevention).
+// Downloads are bounded by httpTimeout and maxResponseSize.
+func downloadFile(rawURL string) (string, error) {
+	if err := validateURLFunc(rawURL); err != nil {
+		return "", fmt.Errorf("URL validation failed: %v", err)
+	}
+
+	resp, err := httpClient.Get(rawURL)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("error fetching URL %s: status code %d", url, resp.StatusCode)
+		return "", fmt.Errorf("error fetching URL %s: status code %d", rawURL, resp.StatusCode)
 	}
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return "", err
 	}
@@ -134,9 +255,10 @@ func downloadFile(url string) (string, error) {
 	return string(body), nil
 }
 
-// parseIPAddresses extracts IP addresses from string content
+// parseIPAddresses extracts IP addresses from string content.
+// The regex is used to locate candidates; each candidate is then validated with
+// net.ParseIP / net.ParseCIDR so invalid strings like 999.999.999.999 are rejected.
 func parseIPAddresses(contents string) map[string]struct{} {
-	// First, split by newlines to handle both CIDR ranges and IP addresses
 	lines := strings.Split(contents, "\n")
 	addresses := make(map[string]struct{})
 
@@ -144,21 +266,27 @@ func parseIPAddresses(contents string) map[string]struct{} {
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		// Skip comments and empty lines
 		if strings.HasPrefix(line, "#") || line == "" {
 			continue
 		}
 
-		// Check if the entire line is an IP or CIDR
+		var candidates []string
 		if ipRegex.MatchString(line) && len(ipRegex.FindString(line)) == len(line) {
-			addresses[line] = struct{}{}
-			continue
+			candidates = []string{line}
+		} else {
+			candidates = ipRegex.FindAllString(line, -1)
 		}
 
-		// Otherwise, extract IP addresses or CIDR ranges from the line
-		matches := ipRegex.FindAllString(line, -1)
-		for _, match := range matches {
-			addresses[match] = struct{}{}
+		for _, candidate := range candidates {
+			if strings.Contains(candidate, "/") {
+				if _, _, err := net.ParseCIDR(candidate); err == nil {
+					addresses[candidate] = struct{}{}
+				}
+			} else {
+				if ip := net.ParseIP(candidate); ip != nil && ip.To4() != nil {
+					addresses[candidate] = struct{}{}
+				}
+			}
 		}
 	}
 
@@ -333,15 +461,33 @@ func isIPWhitelisted(ip string, whitelist map[string]string) (bool, string, stri
 // writeBlocklistFile creates an NGINX configuration file for blocking IPs, considering whitelisted IPs.
 // The geo variable $blocked_source is set to a label identifying the originating blocklist(s),
 // or "" (empty string, falsy in nginx) for addresses that are not blocked.
+// The write is atomic: content is staged in a temp file and renamed into place, so nginx
+// never sees a partially written config even if the process crashes mid-write.
 func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]string, filePath string) error {
-	file, err := os.Create(filePath)
-	if err != nil {
-		return err
+	if err := validateConfFilePath(filePath); err != nil {
+		return fmt.Errorf("refusing to write blocklist: %v", err)
 	}
+
+	dir := filepath.Dir(filePath)
+	tmp, err := os.CreateTemp(dir, ".blocklist-*.conf.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file in %s: %v", dir, err)
+	}
+	tmpName := tmp.Name()
+
+	// On any failure, clean up the temp file.
+	committed := false
+	defer func() {
+		if !committed {
+			os.Remove(tmpName)
+		}
+	}()
+
+	file := tmp
 	defer func(file *os.File) {
 		err := file.Close()
-		if err != nil {
-			logf("Failed to close file: %v\n", err)
+		if err != nil && !committed {
+			logf("Failed to close temp file: %v\n", err)
 		}
 	}(file)
 
@@ -444,20 +590,44 @@ func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]stri
 		return err
 	}
 
-	return writer.Flush()
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+
+	if err := file.Close(); err != nil {
+		return err
+	}
+	committed = true // prevent deferred close from double-closing
+
+	// Atomically replace the live file.
+	if err := os.Rename(tmpName, filePath); err != nil {
+		committed = false // rename failed; deferred cleanup will remove tmpName
+		return fmt.Errorf("failed to atomically replace blocklist file: %v", err)
+	}
+
+	return nil
 }
 
-// restartNginxContainers restarts specified Docker containers
+// restartNginxContainers restarts specified Docker containers.
+// Container names are validated before use and each Docker API call has a hard timeout.
 func restartNginxContainers(cli *client.Client, containerNames []string) error {
-	ctx := context.Background()
-
 	for _, containerName := range containerNames {
-		if err := cli.ContainerStop(ctx, containerName, container.StopOptions{}); err != nil {
-			return fmt.Errorf("failed to stop container %s: %v", containerName, err)
+		if err := validateContainerName(containerName); err != nil {
+			return fmt.Errorf("invalid container name: %v", err)
 		}
 
-		if err := cli.ContainerStart(ctx, containerName, container.StartOptions{}); err != nil {
-			return fmt.Errorf("failed to start container %s: %v", containerName, err)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), dockerOpTimeout)
+		stopErr := cli.ContainerStop(stopCtx, containerName, container.StopOptions{})
+		stopCancel()
+		if stopErr != nil {
+			return fmt.Errorf("failed to stop container %s: %v", containerName, stopErr)
+		}
+
+		startCtx, startCancel := context.WithTimeout(context.Background(), dockerOpTimeout)
+		startErr := cli.ContainerStart(startCtx, containerName, container.StartOptions{})
+		startCancel()
+		if startErr != nil {
+			return fmt.Errorf("failed to start container %s: %v", containerName, startErr)
 		}
 
 		logf("Container %s restarted successfully.\n", containerName)
@@ -471,6 +641,12 @@ func main() {
 	config, err := readConfig("/app/config.json")
 	if err != nil {
 		logf("Failed to read config file: %v\n", err)
+		return
+	}
+
+	// Validate the output path before touching the network — fail fast.
+	if err := validateConfFilePath(config.ConfFilePath); err != nil {
+		logf("Invalid nginx_conf_file_path in config: %v\n", err)
 		return
 	}
 
