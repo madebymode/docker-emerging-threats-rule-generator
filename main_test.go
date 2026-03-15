@@ -2,7 +2,6 @@ package main
 
 import (
   "fmt"
-  "io/ioutil"
   "os"
   "strings"
   "testing"
@@ -238,7 +237,7 @@ func TestBlocklistGeneration(t *testing.T) {
   }
 
   // Read the generated file
-  content, err := ioutil.ReadFile(tmpFile.Name())
+  content, err := os.ReadFile(tmpFile.Name())
   if err != nil {
     t.Fatalf("Failed to read blocklist file: %v", err)
   }

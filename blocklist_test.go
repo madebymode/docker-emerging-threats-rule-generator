@@ -74,6 +74,11 @@ func TestParseIPAddresses(t *testing.T) {
       // only the valid IP survives.
       expected: []string{"192.168.1.1"},
     },
+    {
+      name:     "IPv6 addresses",
+      content:  "2001:db8::1\n2001:db8::/32\n::1\n",
+      expected: []string{"2001:db8::1", "2001:db8::/32", "::1"},
+    },
   }
 
   for _, tt := range tests {
@@ -222,6 +227,21 @@ func TestWriteBlocklistFile(t *testing.T) {
       expectedContains: []string{
         "geo $blocked_source",
         `default        "";`,
+      },
+      expectedNotContain: []string{},
+    },
+    {
+      name:      "IPv6 blocklist entries",
+      whitelist: map[string]string{},
+      blocklist: map[string][]string{
+        "2001:db8::1":  {"test"},
+        "2001:db8::/32": {"test"},
+      },
+      expectedContains: []string{
+        "geo $blocked_source",
+        `default        "";`,
+        "2001:db8::1    test;",
+        "2001:db8::/32    test;",
       },
       expectedNotContain: []string{},
     },
