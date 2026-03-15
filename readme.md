@@ -239,13 +239,64 @@ Whitelist sources are processed in this order of precedence (all equal — any m
 
 ---
 
+## Notifications
+
+The app can alert you via Telegram, email (SMTP/STARTTLS), or a generic webhook when something goes wrong. Two events trigger a notification:
+
+1. **Blocklist update abandoned** — when the percentage of failed remote blocklist downloads reaches `BLOCKLIST_FAILURE_THRESHOLD` (default 30%). The existing `blocklist.conf` is preserved rather than overwriting it with incomplete data.
+2. **Nginx restart failed** — when a configured container cannot be restarted after a blocklist update.
+
+Configure one or more channels via environment variables (see the table below). Channels are independent — set whichever you need; partially configured channels (e.g. a Telegram token with no chat ID) are skipped with a warning rather than failing.
+
+```yaml
+environment:
+  - INSTANCE_NAME=prod-eu          # optional label in alert subject
+  - TELEGRAM_BOT_TOKEN=123:abc
+  - TELEGRAM_CHAT_ID=-1001234567890
+  # or SMTP / WEBHOOK_URL instead
+```
+
+---
+
 ## Environment Variables
+
+### General
 
 | Variable | Default | Description |
 |---|---|---|
 | `DOCKER_HOST_GID` | _(unset)_ | GID of the `docker` group on the host. Required for socket access. Find with `grep docker /etc/group \| cut -d: -f3`. |
 | `RUN_AS_ROOT` | `false` | Run as root instead of the `anubis` user. Only needed when the host docker GID conflicts with Alpine's reserved range. |
 | `RESTART_CONTAINERS` | `true` | When `false`, skips all Docker socket access — only writes `blocklist.conf` and exits. Omit the `docker.sock` volume mount entirely in this mode. Use an external cron job or your orchestrator's reload hook to apply the updated file. |
+| `BLOCKLIST_FAILURE_THRESHOLD` | `30` | Percentage of remote blocklist sources that must fail before the update is abandoned and the existing blocklist preserved. Set to `0` to always write even on partial failures; `100` to never abort early. |
+| `INSTANCE_NAME` | _(unset)_ | Optional label added to notification subjects — e.g. `[ETR prod-eu]`. Useful when running multiple deployments. |
+
+### Notifications
+
+Alerts fire when: (1) enough remote blocklist sources fail that the threshold is exceeded and the update is abandoned, or (2) a configured nginx container fails to restart.
+
+**Telegram**
+
+| Variable | Default | Description |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | _(unset)_ | Bot token from @BotFather. Both token and chat ID must be set to enable Telegram. |
+| `TELEGRAM_CHAT_ID` | _(unset)_ | Target chat or channel ID. |
+
+**Email (SMTP / STARTTLS)**
+
+| Variable | Default | Description |
+|---|---|---|
+| `SMTP_HOST` | _(unset)_ | SMTP server hostname. All three of host, from, and to must be set to enable email. |
+| `SMTP_PORT` | `587` | SMTP port (STARTTLS). |
+| `SMTP_FROM` | _(unset)_ | Sender address. |
+| `SMTP_TO` | _(unset)_ | Comma-separated list of recipient addresses. |
+| `SMTP_USER` | _(unset)_ | SMTP username — omit for unauthenticated relay. |
+| `SMTP_PASS` | _(unset)_ | SMTP password. |
+
+**Webhook**
+
+| Variable | Default | Description |
+|---|---|---|
+| `WEBHOOK_URL` | _(unset)_ | URL to POST `{"subject":"…","body":"…"}` (JSON) on notable events. |
 
 ---
 
@@ -253,7 +304,7 @@ Whitelist sources are processed in this order of precedence (all equal — any m
 
 ### Minimal example
 
-Both services share a named volume. The rule generator writes `blocklist.conf`; nginx reads it on startup.
+Both services share a named volume. The rule generator writes `blocklist.conf`; nginx reads it on startup. A third `log-manager` container rotates the nginx blocklist log daily so it doesn't grow unbounded.
 
 ```yaml
 version: '3'
@@ -275,9 +326,24 @@ services:
     volumes:
       - nginx-blocking-rules:/etc/nginx/conf.d/
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - nginx-logs:/var/log/nginx
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+
+  log-manager:
+    depends_on:
+      - nginx-blacklist
+    build: ./log-manager
+    restart: unless-stopped
+    volumes:
+      - nginx-logs:/var/log/nginx
 
 volumes:
   nginx-blocking-rules:
+  nginx-logs:
 ```
 
 ### Traefik integration
@@ -392,18 +458,20 @@ Example log line:
 ### Real IP trust
 
 ```nginx
-real_ip_header    X-Forwarded-For;
-set_real_ip_from  172.0.0.0/8;
-real_ip_recursive on;
+real_ip_header      X-Forwarded-For;
+real_ip_recursive   on;
+set_real_ip_from    10.0.0.0/8;      # Docker host networking & overlay networks
+set_real_ip_from    172.16.0.0/12;   # Docker default bridge networks (172.16–172.31)
+set_real_ip_from    192.168.0.0/16;  # Docker custom bridge networks
 ```
 
-When nginx sits behind Traefik (or another Docker-internal proxy), `$remote_addr` would be the proxy's container IP without this config. This tells nginx to trust `X-Forwarded-For` from the `172.x.x.x` Docker network so the geo lookup operates on the real client IP.
+When nginx sits behind Traefik (or another Docker-internal proxy), `$remote_addr` would be the proxy's container IP without this config. These three ranges cover all standard Docker networking modes so the geo lookup always operates on the real client IP.
 
-`real_ip_recursive on` handles chained proxies: nginx walks `X-Forwarded-For` right-to-left, skips addresses matching `set_real_ip_from`, and stops at the first untrusted address — the actual client.
+`real_ip_recursive on` handles chained proxies: nginx walks `X-Forwarded-For` right-to-left, skips addresses matching any `set_real_ip_from` range, and stops at the first untrusted address — the actual client.
 
 > **CPU note:** `real_ip_recursive on` scans the full `X-Forwarded-For` chain on every request. An attacker can send an arbitrarily long XFF header, forcing a linear scan before nginx resolves the real IP. Nginx's `large_client_header_buffers` bounds the worst case (default 8 KB / 4 buffers), but if you see elevated CPU on `etr-blocker-nginx` consider stripping or truncating `X-Forwarded-For` at the Traefik layer before the forwardAuth hop.
 
-Adjust `set_real_ip_from` to match your network if you use a different subnet.
+Adjust `set_real_ip_from` ranges to match your network topology.
 
 ---
 

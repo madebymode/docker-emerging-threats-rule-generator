@@ -10,7 +10,12 @@ jq -Rn '[inputs | try fromjson | select(type == "object")]'
 
 ## Getting Logs
 
-**Single container:**
+Blocked requests are written to two places:
+
+- **Docker stdout** — captured by the Docker logging driver. Use `docker logs` to read it.
+- **`/var/log/nginx/blocklist.log`** — persisted to the `nginx-logs` shared volume and rotated daily by the `log-manager` service. Useful for offline analysis across restarts or longer time windows.
+
+**Single container (stdout):**
 ```bash
 docker logs <container-name> 2>&1
 ```
@@ -20,7 +25,12 @@ docker logs <container-name> 2>&1
 docker compose logs nginx-blacklist --no-log-prefix 2>&1
 ```
 
-All examples below use `docker logs <container>` — substitute with the compose variant as needed.
+**From the persisted log file:**
+```bash
+docker exec nginx-blacklist cat /var/log/nginx/blocklist.log
+```
+
+All query examples below use `docker logs <container>` — substitute the log file path for offline analysis against the rotated file.
 
 ---
 
@@ -167,6 +177,13 @@ Capture logs to a file first when running multiple queries against the same wind
 
 ```bash
 docker logs <container> 2>&1 | jq -Rc 'try fromjson | select(type == "object")' > blocked.json
+```
+
+Or read directly from the persisted log volume (no container restart needed):
+
+```bash
+docker exec nginx-blacklist cat /var/log/nginx/blocklist.log \
+  | jq -Rc 'try fromjson | select(type == "object")' > blocked.json
 ```
 
 Then query the file directly:

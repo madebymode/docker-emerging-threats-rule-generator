@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/docker/docker/client"
@@ -22,6 +23,23 @@ func main() {
 	if err != nil {
 		logf("Failed to read config file: %v\n", err)
 		return
+	}
+
+	notifiers := loadNotifiers()
+
+	instanceName := os.Getenv("INSTANCE_NAME")
+	subjectPrefix := "[ETR] "
+	if instanceName != "" {
+		subjectPrefix = "[ETR " + instanceName + "] "
+	}
+
+	failureThreshold := 30
+	if v := os.Getenv("BLOCKLIST_FAILURE_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 100 {
+			failureThreshold = n
+		} else {
+			logf("Invalid BLOCKLIST_FAILURE_THRESHOLD %q, using default 30\n", v)
+		}
 	}
 
 	// Validate the output path before touching the network — fail fast.
@@ -53,16 +71,31 @@ func main() {
 		blocklist[address] = append(blocklist[address], "local_blocklist")
 	}
 
+	remoteBlocklistFailures := 0
 	for _, url := range config.RemoteBlocklists {
 		content, err := downloadFile(url)
 		if err != nil {
 			logf("Failed to download file from %s: %v\n", url, err)
+			remoteBlocklistFailures++
 			continue
 		}
 
 		addresses := parseIPAddresses(content)
 		for address := range addresses {
 			blocklist[address] = append(blocklist[address], url)
+		}
+	}
+
+	if len(config.RemoteBlocklists) > 0 {
+		failurePct := remoteBlocklistFailures * 100 / len(config.RemoteBlocklists)
+		if failurePct >= failureThreshold {
+			msg := fmt.Sprintf(
+				"%d/%d remote blocklist source(s) failed (%d%% >= threshold %d%%); preserving existing blocklist.",
+				remoteBlocklistFailures, len(config.RemoteBlocklists), failurePct, failureThreshold,
+			)
+			logf("%s\n", msg)
+			notify(notifiers, subjectPrefix+"Blocklist update abandoned", msg)
+			return
 		}
 	}
 
@@ -85,7 +118,9 @@ func main() {
 	}
 
 	if err := restartNginxContainers(cli, config.NginxContainerNames); err != nil {
-		logf("Failed to restart Nginx containers: %v\n", err)
+		msg := fmt.Sprintf("Failed to restart nginx containers: %v", err)
+		logf("%s\n", msg)
+		notify(notifiers, subjectPrefix+"Nginx restart failed", msg)
 		return
 	}
 

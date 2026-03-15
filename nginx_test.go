@@ -509,33 +509,22 @@ func TestNginxVariableNaming(t *testing.T) {
 
 // MockDockerClient for testing nginx container restart functionality
 type MockDockerClient struct {
-  containers map[string]bool // containerName -> running state
-  stopCalls  []string
-  startCalls []string
-  errors     map[string]error // operation -> error to return
+  containers   map[string]bool // containerName -> running state
+  restartCalls []string
+  errors       map[string]error // operation -> error to return
 }
 
 func NewMockDockerClient() *MockDockerClient {
   return &MockDockerClient{
-    containers: make(map[string]bool),
-    stopCalls:  make([]string, 0),
-    startCalls: make([]string, 0),
-    errors:     make(map[string]error),
+    containers:   make(map[string]bool),
+    restartCalls: make([]string, 0),
+    errors:       make(map[string]error),
   }
 }
 
-func (m *MockDockerClient) ContainerStop(ctx context.Context, containerID string, options any) error {
-  m.stopCalls = append(m.stopCalls, containerID)
-  if err, exists := m.errors["stop_"+containerID]; exists {
-    return err
-  }
-  m.containers[containerID] = false
-  return nil
-}
-
-func (m *MockDockerClient) ContainerStart(ctx context.Context, containerID string, options any) error {
-  m.startCalls = append(m.startCalls, containerID)
-  if err, exists := m.errors["start_"+containerID]; exists {
+func (m *MockDockerClient) ContainerRestart(ctx context.Context, containerID string, options any) error {
+  m.restartCalls = append(m.restartCalls, containerID)
+  if err, exists := m.errors["restart_"+containerID]; exists {
     return err
   }
   m.containers[containerID] = true
@@ -545,44 +534,32 @@ func (m *MockDockerClient) ContainerStart(ctx context.Context, containerID strin
 // TestNginxContainerRestartLogic tests the container restart logic
 func TestNginxContainerRestartLogic(t *testing.T) {
   tests := []struct {
-    name           string
-    containerNames []string
-    mockErrors     map[string]error
-    expectError    bool
-    expectedStops  []string
-    expectedStarts []string
+    name             string
+    containerNames   []string
+    mockErrors       map[string]error
+    expectError      bool
+    expectedRestarts []string
   }{
     {
-      name:           "Single container success",
-      containerNames: []string{"nginx1"},
-      mockErrors:     map[string]error{},
-      expectError:    false,
-      expectedStops:  []string{"nginx1"},
-      expectedStarts: []string{"nginx1"},
+      name:             "Single container success",
+      containerNames:   []string{"nginx1"},
+      mockErrors:       map[string]error{},
+      expectError:      false,
+      expectedRestarts: []string{"nginx1"},
     },
     {
-      name:           "Multiple containers success",
-      containerNames: []string{"nginx1", "nginx2", "nginx3"},
-      mockErrors:     map[string]error{},
-      expectError:    false,
-      expectedStops:  []string{"nginx1", "nginx2", "nginx3"},
-      expectedStarts: []string{"nginx1", "nginx2", "nginx3"},
+      name:             "Multiple containers success",
+      containerNames:   []string{"nginx1", "nginx2", "nginx3"},
+      mockErrors:       map[string]error{},
+      expectError:      false,
+      expectedRestarts: []string{"nginx1", "nginx2", "nginx3"},
     },
     {
-      name:           "Stop error",
-      containerNames: []string{"nginx1"},
-      mockErrors:     map[string]error{"stop_nginx1": fmt.Errorf("failed to stop")},
-      expectError:    true,
-      expectedStops:  []string{"nginx1"},
-      expectedStarts: []string{},
-    },
-    {
-      name:           "Start error",
-      containerNames: []string{"nginx1"},
-      mockErrors:     map[string]error{"start_nginx1": fmt.Errorf("failed to start")},
-      expectError:    true,
-      expectedStops:  []string{"nginx1"},
-      expectedStarts: []string{"nginx1"},
+      name:             "Restart error",
+      containerNames:   []string{"nginx1"},
+      mockErrors:       map[string]error{"restart_nginx1": fmt.Errorf("failed to restart")},
+      expectError:      true,
+      expectedRestarts: []string{"nginx1"},
     },
   }
 
@@ -602,21 +579,12 @@ func TestNginxContainerRestartLogic(t *testing.T) {
       }
 
       // Verify call order and count
-      if len(mockClient.stopCalls) != len(tt.expectedStops) {
-        t.Errorf("Expected %d stop calls, got %d", len(tt.expectedStops), len(mockClient.stopCalls))
+      if len(mockClient.restartCalls) != len(tt.expectedRestarts) {
+        t.Errorf("Expected %d restart calls, got %d", len(tt.expectedRestarts), len(mockClient.restartCalls))
       }
-      for i, expected := range tt.expectedStops {
-        if i < len(mockClient.stopCalls) && mockClient.stopCalls[i] != expected {
-          t.Errorf("Stop call %d: expected %s, got %s", i, expected, mockClient.stopCalls[i])
-        }
-      }
-
-      if len(mockClient.startCalls) != len(tt.expectedStarts) {
-        t.Errorf("Expected %d start calls, got %d", len(tt.expectedStarts), len(mockClient.startCalls))
-      }
-      for i, expected := range tt.expectedStarts {
-        if i < len(mockClient.startCalls) && mockClient.startCalls[i] != expected {
-          t.Errorf("Start call %d: expected %s, got %s", i, expected, mockClient.startCalls[i])
+      for i, expected := range tt.expectedRestarts {
+        if i < len(mockClient.restartCalls) && mockClient.restartCalls[i] != expected {
+          t.Errorf("Restart call %d: expected %s, got %s", i, expected, mockClient.restartCalls[i])
         }
       }
     })
@@ -628,12 +596,8 @@ func testRestartNginxContainers(cli *MockDockerClient, containerNames []string) 
   ctx := context.Background()
 
   for _, containerName := range containerNames {
-    if err := cli.ContainerStop(ctx, containerName, nil); err != nil {
-      return fmt.Errorf("failed to stop container %s: %v", containerName, err)
-    }
-
-    if err := cli.ContainerStart(ctx, containerName, nil); err != nil {
-      return fmt.Errorf("failed to start container %s: %v", containerName, err)
+    if err := cli.ContainerRestart(ctx, containerName, nil); err != nil {
+      return fmt.Errorf("failed to restart container %s: %v", containerName, err)
     }
   }
 
