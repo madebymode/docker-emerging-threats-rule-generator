@@ -39,7 +39,7 @@ Docker Hub: https://hub.docker.com/r/mxmd/etr
 ```
 
 1. `emerging-threats-rules` fetches the configured IP/CIDR lists once a day, merges and de-duplicates them, sorts them in ascending order, and writes `blocklist.conf` to a shared Docker volume.
-2. Nginx loads that file on startup and holds the blocklist as an in-memory radix tree.
+2. Nginx loads that file on startup and holds the blocklist as an in-memory radix tree. **`nginx/default.conf` must also be mounted** — it defines the `$blocked_source` variable, the `/check_ip` endpoint, and the real-IP unwrapping that makes the geo lookup operate on the actual client IP. Without it, `blocklist.conf` is present but never used.
 3. Traefik's `forwardAuth` middleware sends every request to nginx `/check_ip` before routing upstream. Blocked IPs and empty User-Agents return `403`; everything else returns `200` and traffic continues normally.
 
 ---
@@ -95,7 +95,29 @@ Copy `config.example.json` from the repo or create it from scratch. At minimum, 
 
 The ipsum levels are tiered by threat confidence (8 = highest, 4 = moderate). Start with levels 4–6 for broad coverage; tighten to 6–8 if you see false positives.
 
-### 2. Find your host's Docker group ID
+### 2. Get `nginx/default.conf`
+
+This file is **required** — it defines the `/check_ip` endpoint, the `$blocked_source` variable used by the blocklist, and real-IP unwrapping. A plain nginx container pointed at the shared volume will not block anything without it.
+
+Download it from the repo:
+
+```bash
+mkdir -p nginx
+curl -o nginx/default.conf \
+  https://raw.githubusercontent.com/mxmd/emerging-threats-rules/master/nginx/default.conf
+```
+
+Then mount it in your compose file alongside the shared volume (both land in `/etc/nginx/conf.d/`):
+
+```yaml
+volumes:
+  - nginx-blocking-rules:/etc/nginx/conf.d/
+  - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+```
+
+See [Nginx Configuration](#nginx-configuration-nginxdefaultconf) for a full breakdown of what the file does and how to adjust it for your network topology.
+
+### 3. Find your host's Docker group ID
 
 The rule generator needs the Docker socket to restart nginx after each daily refresh:
 
@@ -106,7 +128,7 @@ grep docker /etc/group | cut -d: -f3
 
 Set `DOCKER_HOST_GID` in `docker-compose.yml` to that value.
 
-### 3. Bring it up
+### 4. Bring it up
 
 ```bash
 # Fetch the blocklists and write blocklist.conf (runs once, then exits)
@@ -118,7 +140,7 @@ docker compose up -d nginx-blacklist
 
 The cron job inside `emerging-threats-rules` refreshes the blocklist and restarts nginx automatically every day.
 
-### 4. Verify it's working
+### 5. Verify it's working
 
 ```bash
 # Allowed request — expect 200
@@ -411,6 +433,16 @@ labels:
 
 ## Nginx Configuration (`nginx/default.conf`)
 
+> **This file is required.** Without it, nginx has no `/check_ip` endpoint, no `$blocked_source` variable reference, and no real-IP unwrapping — `blocklist.conf` is loaded but never consulted. Every request passes through unchecked.
+>
+> The docker-compose examples mount it explicitly to prevent the shared volume from overwriting it:
+> ```yaml
+> volumes:
+>   - nginx-blocking-rules:/etc/nginx/conf.d/        # blocklist.conf lands here
+>   - ./nginx/default.conf:/etc/nginx/conf.d/default.conf  # must be mounted separately
+> ```
+> Do not skip this mount or replace it with a generic nginx config.
+
 The included `nginx/default.conf` and the generated `blocklist.conf` both land in `/etc/nginx/conf.d/` via the shared volume.
 
 | File | Source | Purpose |
@@ -472,6 +504,25 @@ When nginx sits behind Traefik (or another Docker-internal proxy), `$remote_addr
 > **CPU note:** `real_ip_recursive on` scans the full `X-Forwarded-For` chain on every request. An attacker can send an arbitrarily long XFF header, forcing a linear scan before nginx resolves the real IP. Nginx's `large_client_header_buffers` bounds the worst case (default 8 KB / 4 buffers), but if you see elevated CPU on `etr-blocker-nginx` consider stripping or truncating `X-Forwarded-For` at the Traefik layer before the forwardAuth hop.
 
 Adjust `set_real_ip_from` ranges to match your network topology.
+
+### Traefik-side hardening (strongly recommended)
+
+`real_ip_recursive on` stops a client from forging a trusted IP — but only if Traefik itself hasn't been fooled first. A client can inject an `X-Forwarded-For` header with a spoofed IP before it reaches Traefik; if Traefik passes that header through unchanged, nginx will peel it off as the "real" client IP and the blocklist lookup will be against a forged address.
+
+Lock this down in your Traefik static config:
+
+```yaml
+# traefik.yml
+entryPoints:
+  web:
+    forwardedHeaders:
+      trustedIPs:
+        - "127.0.0.1/32"
+        - "10.0.0.0/8"       # upstream CDN or load-balancer
+        - "172.16.0.0/12"    # Docker bridge networks
+```
+
+With `trustedIPs` set, Traefik strips any client-supplied `X-Forwarded-For` headers and replaces them with the real connecting IP before the forwardAuth hop to nginx. Without it, a blocked IP can bypass the blocklist by prepending any address to its XFF header.
 
 ---
 
