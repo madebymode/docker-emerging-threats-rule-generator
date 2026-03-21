@@ -493,3 +493,9 @@ Alternative configurations for setups that don't use Traefik:
 
 - [reporting.md](reporting.md) — Query and analyze blocked request logs with `jq`
 - [testing.md](testing.md) — Manually test the blocklist and nginx behavior locally
+
+---
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](./LICENSE).
