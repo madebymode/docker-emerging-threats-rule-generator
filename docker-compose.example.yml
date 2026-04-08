@@ -1,0 +1,51 @@
+version: '3'
+
+# Quick-start compose for emerging-threats-rules + nginx.
+# Copy this to docker-compose.yml and adjust DOCKER_HOST_GID before running.
+#
+# Usage:
+#   1. Copy config.example.json → config.json and set nginx_container_names: ["nginx-blacklist"]
+#   2. Download nginx/default.conf (see README Quick Start step 2)
+#   3. Set DOCKER_HOST_GID: grep docker /etc/group | cut -d: -f3
+#   4. docker compose up emerging-threats-rules
+#   5. docker compose up -d nginx-blacklist log-manager
+#
+# For Traefik integration see examples/traefik-v3/docker-compose.yml
+
+services:
+  emerging-threats-rules:
+    image: mxmd/etr:v2
+    environment:
+      - DOCKER_HOST_GID=1003   # grep docker /etc/group | cut -d: -f3
+      - RESTART_CONTAINERS=true
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - nginx-blocking-rules:/app/nginx/conf/
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  nginx-blacklist:
+    image: nginx:alpine
+    container_name: nginx-blacklist
+    depends_on:
+      - emerging-threats-rules
+    volumes:
+      - nginx-blocking-rules:/etc/nginx/conf.d/
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - blocklist-logs:/var/log/blocklist
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+
+  log-manager:
+    depends_on:
+      - nginx-blacklist
+    build: ./log-manager
+    restart: unless-stopped
+    volumes:
+      - blocklist-logs:/var/log/blocklist
+
+volumes:
+  nginx-blocking-rules:
+  blocklist-logs:
