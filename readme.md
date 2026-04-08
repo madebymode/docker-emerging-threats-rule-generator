@@ -326,7 +326,7 @@ Alerts fire when: (1) enough remote blocklist sources fail that the threshold is
 
 ### Minimal example
 
-Both services share a named volume. The rule generator writes `blocklist.conf`; nginx reads it on startup. A third `log-manager` container rotates the nginx blocklist log daily so it doesn't grow unbounded.
+The rule generator and nginx share a named volume for `blocklist.conf`. A separate `blocklist-logs` volume stores the rotated file log so nginx can keep its normal container stdout/stderr wiring intact.
 
 ```yaml
 version: '3'
@@ -348,7 +348,7 @@ services:
     volumes:
       - nginx-blocking-rules:/etc/nginx/conf.d/
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
-      - nginx-logs:/var/log/nginx
+      - blocklist-logs:/var/log/blocklist
     logging:
       driver: "json-file"
       options:
@@ -361,11 +361,11 @@ services:
     build: ./log-manager
     restart: unless-stopped
     volumes:
-      - nginx-logs:/var/log/nginx
+      - blocklist-logs:/var/log/blocklist
 
 volumes:
   nginx-blocking-rules:
-  nginx-logs:
+  blocklist-logs:
 ```
 
 ### Traefik integration

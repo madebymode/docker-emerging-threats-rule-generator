@@ -1,7 +1,7 @@
 #!/bin/sh
 # Executed daily by busybox crond (/etc/periodic/daily/).
-# State file lives on the shared nginx-logs volume so it survives container
+# State file lives on the shared blocklist log volume so it survives container
 # restarts and prevents double-rotation within the same day.
 set -e
 
-logrotate -s /var/log/nginx/.logrotate.status /etc/logrotate.d/nginx-blocklist
+logrotate -s /var/log/blocklist/.logrotate.status /etc/logrotate.d/nginx-blocklist
