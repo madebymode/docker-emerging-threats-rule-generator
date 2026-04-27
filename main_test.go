@@ -327,13 +327,13 @@ func TestCIDRvsBlocklistCIDR(t *testing.T) {
     {
       name:              "Whitelist has larger CIDR that contains blocklist CIDR",
       whitelistCIDR:     "192.168.0.0/16", // Covers 192.168.0.0 - 192.168.255.255
-      blocklistCIDR:     "192.168.1.0/24", // Covers 192.168.1.0 - 192.168.1.265
+      blocklistCIDR:     "192.168.1.0/24", // Covers 192.168.1.0 - 192.168.1.255
       expectWhitelisted: true,             // The entire blocklist CIDR should be whitelisted
     },
     {
       name:              "Whitelist has smaller CIDR contained within blocklist CIDR",
       whitelistCIDR:     "192.168.1.0/26", // Covers 192.168.1.0 - 192.168.1.63
-      blocklistCIDR:     "192.168.1.0/24", // Covers 192.168.1.0 - 192.168.1.265
+      blocklistCIDR:     "192.168.1.0/24", // Covers 192.168.1.0 - 192.168.1.255
       expectWhitelisted: true,             // The smaller whitelist CIDR should be whitelisted
     },
     {
