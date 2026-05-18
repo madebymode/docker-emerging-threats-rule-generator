@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 // restartNginxContainers restarts specified Docker containers.
@@ -19,7 +18,7 @@ func restartNginxContainers(cli *client.Client, containerNames []string) error {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), dockerOpTimeout)
-		err := cli.ContainerRestart(ctx, containerName, container.StopOptions{})
+		_, err := cli.ContainerRestart(ctx, containerName, client.ContainerRestartOptions{})
 		cancel()
 		if err != nil {
 			return fmt.Errorf("failed to restart container %s: %v", containerName, err)

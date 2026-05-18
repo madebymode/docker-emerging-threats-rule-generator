@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 func logf(format string, args ...interface{}) {
