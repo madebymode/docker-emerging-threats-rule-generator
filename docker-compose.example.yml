@@ -6,7 +6,7 @@ version: '3'
 # Usage:
 #   1. Copy config.example.json → config.json and set nginx_container_names: ["nginx-blacklist"]
 #   2. Download nginx/default.conf (see README Quick Start step 2)
-#   3. Set DOCKER_HOST_GID: grep docker /etc/group | cut -d: -f3
+#   3. Set DOCKER_HOST_GID and group_add: grep docker /etc/group | cut -d: -f3
 #   4. docker compose up emerging-threats-rules
 #   5. docker compose up -d nginx-blacklist log-manager
 #
@@ -18,6 +18,8 @@ services:
     environment:
       - DOCKER_HOST_GID=1003   # grep docker /etc/group | cut -d: -f3
       - RESTART_CONTAINERS=true
+    group_add:
+      - "1003"                 # match DOCKER_HOST_GID for docker.sock access
     volumes:
       - ./config.json:/app/config.json:ro
       - nginx-blocking-rules:/app/nginx/conf/

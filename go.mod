@@ -2,9 +2,9 @@ module nginx_blacklist
 
 go 1.26.0
 
-require github.com/moby/moby/api v1.54.2 // indirect
+require github.com/moby/moby/api v1.55.0 // indirect
 
-require github.com/moby/moby/client v0.4.1
+require github.com/moby/moby/client v0.5.0
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect

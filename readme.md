@@ -126,7 +126,7 @@ grep docker /etc/group | cut -d: -f3
 # e.g. 1003
 ```
 
-Set `DOCKER_HOST_GID` in `docker-compose.yml` to that value.
+Set both `DOCKER_HOST_GID` and `group_add` in `docker-compose.yml` to that value. The container runs as the unprivileged `anubis` user by default, and `group_add` grants that user access to the mounted Docker socket.
 
 ### 4. Bring it up
 
@@ -286,8 +286,8 @@ environment:
 
 | Variable | Default | Description |
 |---|---|---|
-| `DOCKER_HOST_GID` | _(unset)_ | GID of the `docker` group on the host. Required for socket access. Find with `grep docker /etc/group \| cut -d: -f3`. |
-| `RUN_AS_ROOT` | `false` | Run as root instead of the `anubis` user. Only needed when the host docker GID conflicts with Alpine's reserved range. |
+| `DOCKER_HOST_GID` | _(unset)_ | GID of the `docker` group on the host. For non-root socket access, set compose `group_add` to the same numeric value. Find it with `grep docker /etc/group \| cut -d: -f3`. |
+| `RUN_AS_ROOT` | `false` | Run update commands as root when the container itself is started as root. The default image user is `anubis`; set `user: root` only for legacy deployments that need runtime group setup. |
 | `RESTART_CONTAINERS` | `true` | When `false`, skips all Docker socket access — only writes `blocklist.conf` and exits. Omit the `docker.sock` volume mount entirely in this mode. Use an external cron job or your orchestrator's reload hook to apply the updated file. |
 | `BLOCKLIST_FAILURE_THRESHOLD` | `30` | Percentage of remote blocklist sources that must fail before the update is abandoned and the existing blocklist preserved. Set to `0` to always write even on partial failures; `100` to never abort early. |
 | `INSTANCE_NAME` | _(unset)_ | Optional label added to notification subjects — e.g. `[ETR prod-eu]`. Useful when running multiple deployments. |
@@ -336,6 +336,8 @@ services:
     image: mxmd/etr:v2
     environment:
       - DOCKER_HOST_GID=1003   # grep docker /etc/group | cut -d: -f3
+    group_add:
+      - "1003"                 # match DOCKER_HOST_GID for docker.sock access
     volumes:
       - ./config.json:/app/config.json:ro
       - nginx-blocking-rules:/app/nginx/conf/
@@ -400,6 +402,8 @@ services:
     restart: always
     environment:
       - DOCKER_HOST_GID=1003
+    group_add:
+      - "1003"
     volumes:
       - ./etr/config.json:/app/config.json:ro
       - nginx-blocking-rules:/app/nginx/conf/

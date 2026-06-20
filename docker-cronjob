@@ -2,13 +2,20 @@
 
 echo "Starting cron job script..."
 
-# Check if the RUN_AS_ROOT environment variable is set to "true"
-if [ "$RUN_AS_ROOT" = "true" ]; then
-    echo "Running cron callable as root..."
-    # Execute the command directly without su-exec to run as root
-    /app/nginx_blacklist
+if [ "$(id -u)" = "0" ]; then
+    # Check if the RUN_AS_ROOT environment variable is set to "true"
+    if [ "$RUN_AS_ROOT" = "true" ]; then
+        echo "Running cron callable as root..."
+        /app/nginx_blacklist
+    else
+        echo "Running cron callable as user anubis..."
+        su-exec anubis /app/nginx_blacklist
+    fi
 else
-    echo "Running cron callable as user anubis..."
-    # Use su-exec to run the command as the anubis user
-    su-exec anubis /app/nginx_blacklist
+    if [ "$RUN_AS_ROOT" = "true" ]; then
+        echo "RUN_AS_ROOT=true was requested, but cron is running as $(id -un). Running as current user."
+    else
+        echo "Running cron callable as user $(id -un)..."
+    fi
+    /app/nginx_blacklist
 fi

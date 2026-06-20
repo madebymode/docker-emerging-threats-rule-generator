@@ -18,7 +18,7 @@ before proxying to your application.
 # 1. Find your Docker host's docker group GID
 grep docker /etc/group | cut -d: -f3
 
-# 2. Set DOCKER_HOST_GID in docker-compose.yml to that value
+# 2. Set DOCKER_HOST_GID and group_add in docker-compose.yml to that value
 
 # 3. Edit nginx/default.conf
 #    - Update set_real_ip_from to your pfSense LAN interface IP

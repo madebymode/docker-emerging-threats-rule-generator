@@ -10,7 +10,7 @@ version: '3'
 #
 # Usage:
 #   1. Create the shared network:   docker network create traefik-public
-#   2. Set DOCKER_HOST_GID:         grep docker /etc/group | cut -d: -f3
+#   2. Set DOCKER_HOST_GID and group_add: grep docker /etc/group | cut -d: -f3
 #   3. docker compose up
 
 services:
@@ -61,6 +61,8 @@ services:
       - DOCKER_HOST_GID=1003   # grep docker /etc/group | cut -d: -f3
       - RUN_AS_ROOT=false
       - RESTART_CONTAINERS=true
+    group_add:
+      - "1003"                 # match DOCKER_HOST_GID for docker.sock access
     volumes:
       - ./config.json:/app/config.json:ro
       - nginx-blocking-rules:/app/nginx/conf/

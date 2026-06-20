@@ -18,7 +18,7 @@ ENV CGO_ENABLED=1
 RUN go build -o nginx_blacklist
 
 # Use a smaller Alpine image for running the binary
-FROM alpine:3.23
+FROM alpine:3.24
 
 # Set the working directory
 WORKDIR /app
@@ -33,16 +33,16 @@ COPY docker-cronjob /etc/periodic/daily/update_block_lists
 RUN apk add --no-cache tzdata su-exec \
     && addgroup -S rites \
     && adduser -S anubis -G rites \
+    && mkdir -p /app/nginx/conf /app/crontabs \
     && chmod +x nginx_blacklist \
     && chmod +x docker-entrypoint.sh \
     && chmod +x /etc/periodic/daily/update_block_lists \
     && ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime \
     && echo "America/New_York" > /etc/timezone \
     && chown -R anubis:rites /app \
-    && mkdir -p /var/spool/cron/crontabs \
-    && echo "30 2 * * * /etc/periodic/daily/update_block_lists" > /var/spool/cron/crontabs/root \
-    && chmod 600 /var/spool/cron/crontabs/root \
-    && chown root:root /var/spool/cron/crontabs/root
+    && echo "30 2 * * * /etc/periodic/daily/update_block_lists" > /app/crontabs/anubis \
+    && chmod 600 /app/crontabs/anubis \
+    && chown -R anubis:rites /app/crontabs
 
 # Use a volume to share Docker socket from the host
 VOLUME ["/var/run/docker.sock"]
@@ -50,5 +50,9 @@ VOLUME ["/var/run/docker.sock"]
 # Set the entrypoint
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
+# Run as the unprivileged user by default. The entrypoint still supports
+# root startup when a deployment explicitly overrides the container user.
+USER anubis
+
 # Default command runs crond
-CMD ["crond", "-f", "-l", "8", "-L", "/dev/stdout"]
+CMD ["crond", "-f", "-l", "8", "-L", "/dev/stdout", "-c", "/app/crontabs"]
