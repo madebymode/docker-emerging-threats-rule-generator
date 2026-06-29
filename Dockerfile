@@ -40,9 +40,10 @@ RUN apk add --no-cache tzdata su-exec \
     && ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime \
     && echo "America/New_York" > /etc/timezone \
     && chown -R anubis:rites /app \
-    && echo "30 2 * * * /etc/periodic/daily/update_block_lists" > /app/crontabs/anubis \
-    && chmod 600 /app/crontabs/anubis \
-    && chown -R anubis:rites /app/crontabs
+    && chown root:root /app/crontabs \
+    && echo "30 2 * * * /etc/periodic/daily/update_block_lists >> /proc/1/fd/1 2>&1" > /app/crontabs/root \
+    && chmod 600 /app/crontabs/root \
+    && chown root:root /app/crontabs/root
 
 # Use a volume to share Docker socket from the host
 VOLUME ["/var/run/docker.sock"]
@@ -50,9 +51,9 @@ VOLUME ["/var/run/docker.sock"]
 # Set the entrypoint
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-# Run as the unprivileged user by default. The entrypoint still supports
-# root startup when a deployment explicitly overrides the container user.
-USER anubis
+# Run PID 1 as root so BusyBox crond can read the root-owned spool.
+# The entrypoint and cron wrapper run the ETR command as anubis by default.
+USER root
 
 # Default command runs crond
-CMD ["crond", "-f", "-l", "8", "-L", "/dev/stdout", "-c", "/app/crontabs"]
+CMD ["crond", "-f", "-d", "8", "-c", "/app/crontabs"]
