@@ -42,20 +42,14 @@ exec_as_configured_user() {
 
 configure_crontab() {
     cron_dir="/app/crontabs"
+    cron_command="30 2 * * * /etc/periodic/daily/update_block_lists >> /proc/1/fd/1 2>&1"
 
-    if [ "$RUN_AS_ROOT" = "true" ]; then
-        log "Configuring root crontab..."
-        echo "30 2 * * * /etc/periodic/daily/update_block_lists" > "$cron_dir/root"
-        rm -f "$cron_dir/anubis"
-        chown root:root "$cron_dir/root"
-        chmod 600 "$cron_dir/root"
-    else
-        log "Configuring anubis crontab..."
-        echo "30 2 * * * /etc/periodic/daily/update_block_lists" > "$cron_dir/anubis"
-        rm -f "$cron_dir/root"
-        chown anubis:rites "$cron_dir/anubis"
-        chmod 600 "$cron_dir/anubis"
-    fi
+    log "Configuring root crontab..."
+    echo "$cron_command" > "$cron_dir/root"
+    rm -f "$cron_dir/anubis"
+    chown root:root "$cron_dir" "$cron_dir/root"
+    chmod 755 "$cron_dir"
+    chmod 600 "$cron_dir/root"
 }
 
 log "Starting entrypoint script..."
