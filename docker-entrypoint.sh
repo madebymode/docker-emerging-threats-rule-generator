@@ -1,4 +1,8 @@
 #!/bin/sh
+set -eu
+
+RUN_AS_ROOT=${RUN_AS_ROOT:-false}
+DOCKER_HOST_GID=${DOCKER_HOST_GID:-}
 
 log() {
     echo "[$(date '+%Y/%m/%d %H:%M:%S')] $*"
@@ -40,61 +44,33 @@ exec_as_configured_user() {
     fi
 }
 
-configure_crontab() {
-    cron_dir="/app/crontabs"
-    cron_command="30 2 * * * /etc/periodic/daily/update_block_lists >> /proc/1/fd/1 2>&1"
-
-    log "Configuring root crontab..."
-    echo "$cron_command" > "$cron_dir/root"
-    rm -f "$cron_dir/anubis"
-    chown root:root "$cron_dir" "$cron_dir/root"
-    chmod 755 "$cron_dir"
-    chmod 600 "$cron_dir/root"
-}
-
 log "Starting entrypoint script..."
 
 if [ "$(id -u)" = "0" ]; then
-    if [ ! -z "$DOCKER_HOST_GID" ]; then
+    if [ -n "$DOCKER_HOST_GID" ]; then
+        case "$DOCKER_HOST_GID" in
+            *[!0-9]*) log "DOCKER_HOST_GID must be a numeric group ID."; exit 1 ;;
+        esac
         log "DOCKER_HOST_GID is set to $DOCKER_HOST_GID"
-        if ! getent group docker > /dev/null 2>&1; then
-            log "Docker group does not exist. Attempting to create with GID $DOCKER_HOST_GID..."
-            if addgroup -g "$DOCKER_HOST_GID" docker; then
-                log "Docker group created with GID $DOCKER_HOST_GID."
-            else
-                log "Failed to create Docker group with GID $DOCKER_HOST_GID. It might already be in use."
-                exit 1
-            fi
-        else
-            log "Docker group already exists."
+        # Reuse a matching GID even when its group is not called docker.
+        docker_group=$(getent group "$DOCKER_HOST_GID" | cut -d: -f1)
+        if [ -z "$docker_group" ]; then
+            docker_group="etr-docker-$DOCKER_HOST_GID"
+            addgroup -g "$DOCKER_HOST_GID" "$docker_group"
         fi
-
-        if getent group docker > /dev/null 2>&1; then
-            log "Adding anubis user to the docker group..."
-            if adduser anubis docker; then
-                log "Anubis user added to the docker group."
-            else
-                log "Failed to add anubis to the docker group."
-                exit 1
-            fi
-        else
-            log "Docker group not found. Cannot add anubis to non-existent group."
-            exit 1
-        fi
+        adduser anubis "$docker_group"
     else
         log "DOCKER_HOST_GID is not set. Skipping group adjustments."
     fi
 
     log "Adjusting permissions of /app/nginx/conf/..."
-    chown -R anubis:rites /app/nginx/conf/
+    chown -Rh anubis:rites /app/nginx/conf/
     log "Permissions adjusted."
 
-    # Give the anubis user write access to stdout and stderr
-    chown anubis:rites /dev/stdout /dev/stderr
-
-    configure_crontab
+    # Cron configuration and executable files remain root-owned from the image.
+    # Child processes inherit stdout/stderr; changing device ownership is unnecessary.
 else
-    if [ ! -z "$DOCKER_HOST_GID" ]; then
+    if [ -n "$DOCKER_HOST_GID" ]; then
         log "DOCKER_HOST_GID is set, but group changes require root. Use compose group_add with this GID for Docker socket access."
     else
         log "DOCKER_HOST_GID is not set. Skipping group adjustments."

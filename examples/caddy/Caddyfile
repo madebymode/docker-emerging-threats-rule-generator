@@ -8,7 +8,7 @@
 # is used. For local testing, replace the domain with ":80" to disable TLS.
 
 example.com {
-    forward_auth etr-blocker-nginx:80 {
+    forward_auth etr-blocker-nginx:8080 {
         uri /check_ip
     }
 

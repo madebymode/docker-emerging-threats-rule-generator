@@ -34,7 +34,7 @@ your Docker host's LAN IP so HAProxy can reach it:
 
 ```yaml
 ports:
-  - "192.168.1.50:8080:80"   # replace with your Docker host's LAN IP
+  - "192.168.1.50:8080:8080"   # replace with your Docker host's LAN IP
 ```
 
 ---

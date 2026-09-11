@@ -116,6 +116,7 @@ func main() {
 		logf("Failed to create Docker client: %v\n", err)
 		return
 	}
+	defer cli.Close()
 
 	if err := restartNginxContainers(cli, config.NginxContainerNames); err != nil {
 		msg := fmt.Sprintf("Failed to restart nginx containers: %v", err)

@@ -4,6 +4,8 @@ Pulls daily-refreshed threat intelligence IP lists and generates a `blocklist.co
 
 Docker Hub: https://hub.docker.com/r/mxmd/etr
 
+ETR v3 hardens the container and input handling and uses Go 1.27. Before upgrading from v2, read the [v3 migration notes](MIGRATING-v3.md).
+
 ---
 
 ## How It Works
@@ -72,7 +74,7 @@ The `forwardAuth` hop itself is a loopback call to a local container doing a pur
 Official images are published to Docker Hub for **amd64 and arm64** — no repo clone required.
 
 ```bash
-docker pull mxmd/etr:v2
+docker pull mxmd/etr:v3
 ```
 
 ### 1. Create `config.json`
@@ -111,8 +113,8 @@ Then mount it in your compose file alongside the shared volume (both land in `/e
 
 ```yaml
 volumes:
-  - nginx-blocking-rules:/etc/nginx/conf.d/
-  - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+  - nginx-blocking-rules:/etc/nginx/conf.d/:ro
+  - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
 ```
 
 See [Nginx Configuration](#nginx-configuration-nginxdefaultconf) for a full breakdown of what the file does and how to adjust it for your network topology.
@@ -144,10 +146,10 @@ The cron job inside `emerging-threats-rules` refreshes the blocklist and restart
 
 ```bash
 # Allowed request — expect 200
-docker exec -it nginx-blacklist curl -s -o /dev/null -w "%{http_code}" localhost/check_ip
+docker exec -it nginx-blacklist wget -S -O /dev/null http://localhost:8080/check_ip
 
 # Empty User-Agent — always blocked, expect 403
-docker exec -it nginx-blacklist curl -s -o /dev/null -w "%{http_code}" -A "" localhost/check_ip
+docker exec -it nginx-blacklist wget -S -O /dev/null -U "" http://localhost:8080/check_ip
 ```
 
 Watch live blocks:
@@ -333,7 +335,17 @@ version: '3'
 
 services:
   emerging-threats-rules:
-    image: mxmd/etr:v2
+    image: mxmd/etr:v3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    pids_limit: 128
     environment:
       - DOCKER_HOST_GID=1003   # grep docker /etc/group | cut -d: -f3
     group_add:
@@ -344,12 +356,19 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 
   nginx-blacklist:
-    image: nginx:alpine
+    image: nginxinc/nginx-unprivileged:alpine-slim
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
     depends_on:
       - emerging-threats-rules
     volumes:
-      - nginx-blocking-rules:/etc/nginx/conf.d/
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - nginx-blocking-rules:/etc/nginx/conf.d/:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - blocklist-logs:/var/log/blocklist
     logging:
       driver: "json-file"
@@ -393,12 +412,22 @@ services:
     labels:
       - "traefik.enable=true"
       # Register the blocklist middleware — points at the nginx checker
-      - "traefik.http.middlewares.etr-blocklist.forwardauth.address=http://etr-blocker-nginx/check_ip"
+      - "traefik.http.middlewares.etr-blocklist.forwardauth.address=http://etr-blocker-nginx:8080/check_ip"
     networks:
       - traefik-public
 
   etr-downloader:
-    image: mxmd/etr
+    image: mxmd/etr:v3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    pids_limit: 128
     restart: always
     environment:
       - DOCKER_HOST_GID=1003
@@ -410,15 +439,22 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 
   etr-blocker-nginx:
-    image: nginx:alpine
+    image: nginxinc/nginx-unprivileged:alpine-slim
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
     restart: always
     deploy:
       replicas: 2
     depends_on:
       - etr-downloader
     volumes:
-      - nginx-blocking-rules:/etc/nginx/conf.d/
-      - ./etr/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - nginx-blocking-rules:/etc/nginx/conf.d/:ro
+      - ./etr/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - traefik-public
 
@@ -442,8 +478,8 @@ labels:
 > The docker-compose examples mount it explicitly to prevent the shared volume from overwriting it:
 > ```yaml
 > volumes:
->   - nginx-blocking-rules:/etc/nginx/conf.d/        # blocklist.conf lands here
->   - ./nginx/default.conf:/etc/nginx/conf.d/default.conf  # must be mounted separately
+>   - nginx-blocking-rules:/etc/nginx/conf.d/:ro        # blocklist.conf lands here
+>   - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro  # must be mounted separately
 > ```
 > Do not skip this mount or replace it with a generic nginx config.
 

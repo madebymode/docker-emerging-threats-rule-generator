@@ -1,2 +1,9 @@
-config.json
-config.example.json
+# Allow only inputs used by the root Dockerfile.
+**
+!Dockerfile
+!.dockerignore
+!go.mod
+!go.sum
+!*.go
+!docker-entrypoint.sh
+!docker-cronjob
