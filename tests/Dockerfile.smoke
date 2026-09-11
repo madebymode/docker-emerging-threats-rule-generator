@@ -1,0 +1,4 @@
+ARG ETR_IMAGE=etr:hardening-test
+FROM ${ETR_IMAGE}
+COPY tests/generator-smoke.sh /smoke.sh
+ENTRYPOINT ["sh", "/smoke.sh"]

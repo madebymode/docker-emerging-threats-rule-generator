@@ -1,0 +1,7 @@
+**
+!nginx/
+!nginx/default.conf
+!tests/
+!tests/nginx-fixture.json
+!tests/nginx-smoke.conf
+!tests/nginx-smoke.sh

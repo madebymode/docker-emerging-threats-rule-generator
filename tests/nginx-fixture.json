@@ -1,0 +1,1 @@
+{"local_whitelist":["1.2.3.4"],"local_blocklist":["1.2.3.0/24","2001:db8::1"],"nginx_conf_file_path":"/app/nginx/conf/blocklist.conf"}
