@@ -243,6 +243,9 @@ func isValidIPOrCIDR(s string) bool {
 
 // TestNginxConfigPerformance tests config generation performance with large datasets
 func TestNginxConfigPerformance(t *testing.T) {
+  if testing.Short() {
+    t.Skip("wall-clock performance check runs in the full suite without race instrumentation")
+  }
   // Create large datasets
   whitelist := make(map[string]string)
   blocklist := make(map[string][]string)

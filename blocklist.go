@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
 	"fmt"
 	"net"
 	"net/url"
@@ -18,7 +19,21 @@ import (
 //   - "https://www.ipdeny.com/…/cn-aggregated.zone"                       → "cn"
 //   - "https://rules.emergingthreats.net/…/emerging-Block-IPs.txt"        → "emerging-block-ips"
 //   - "local_blocklist"                                                    → "local"
-func labelFromSource(source string) string {
+func labelFromSource(source string) (label string) {
+	// Labels are emitted as nginx tokens. URL paths are percent-decoded by
+	// url.Parse, so never let quotes, whitespace, braces or directives through.
+	defer func() {
+		label = strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._+-", r) {
+				return r
+			}
+			return '-'
+		}, label)
+		// nginx treats both an empty string and "0" as false in an if.
+		if label == "" || label == "0" {
+			label = "blocked"
+		}
+	}()
 	if source == "local_blocklist" || source == "local_whitelist" {
 		return "local"
 	}
@@ -78,18 +93,33 @@ func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]stri
 		return fmt.Errorf("refusing to write blocklist: %v", err)
 	}
 
-	dir := filepath.Dir(filePath)
-	tmp, err := os.CreateTemp(dir, ".blocklist-*.conf.tmp")
+	// Anchor all filesystem operations to directory descriptors, including
+	// the parent, so symlinks or concurrent renames cannot escape the volume.
+	root, err := os.OpenRoot(allowedConfDir)
 	if err != nil {
-		return fmt.Errorf("failed to create temp file in %s: %v", dir, err)
+		return err
 	}
-	tmpName := tmp.Name()
+	defer root.Close()
+	rel, err := filepath.Rel(allowedConfDir, filepath.Clean(filePath))
+	if err != nil {
+		return err
+	}
+	dir, err := root.OpenRoot(filepath.Dir(rel))
+	if err != nil {
+		return fmt.Errorf("failed to open output directory: %v", err)
+	}
+	defer dir.Close()
+	tmpName := ".blocklist-" + rand.Text() + ".conf.tmp"
+	tmp, err := dir.OpenFile(tmpName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %v", err)
+	}
 
 	// On any failure, clean up the temp file.
 	committed := false
 	defer func() {
 		if !committed {
-			os.Remove(tmpName)
+			dir.Remove(tmpName)
 		}
 	}()
 
@@ -202,6 +232,10 @@ func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]stri
 	if err := writer.Flush(); err != nil {
 		return err
 	}
+	// nginx may run with a different UID on the read-only shared volume.
+	if err := file.Chmod(0644); err != nil {
+		return err
+	}
 
 	if err := file.Close(); err != nil {
 		return err
@@ -209,7 +243,7 @@ func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]stri
 	committed = true // prevent deferred close from double-closing
 
 	// Atomically replace the live file.
-	if err := os.Rename(tmpName, filePath); err != nil {
+	if err := dir.Rename(tmpName, filepath.Base(rel)); err != nil {
 		committed = false // rename failed; deferred cleanup will remove tmpName
 		return fmt.Errorf("failed to atomically replace blocklist file: %v", err)
 	}

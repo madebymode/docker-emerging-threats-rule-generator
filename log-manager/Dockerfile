@@ -1,6 +1,6 @@
 FROM alpine:3.23
 
-RUN apk add --no-cache logrotate
+RUN apk upgrade --no-cache && apk add --no-cache logrotate
 
 COPY logrotate.conf /etc/logrotate.d/nginx-blocklist
 COPY rotate        /etc/periodic/daily/nginx-blocklist-rotate

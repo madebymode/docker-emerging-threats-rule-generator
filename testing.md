@@ -17,22 +17,23 @@ docker compose up nginx-blacklist
 docker exec -it <nginx-container-name> sh
 ```
 
-From inside the container you can hit `localhost` directly — no port mapping needed.
+From inside the container you can hit `localhost:8080` directly — no port mapping needed.
 
 ---
 
 ## Note: Trusting the Proxy for Forwarded Headers
 
-By default, `set_real_ip_from` in `default.conf` only trusts `X-Forwarded-For` headers from `172.0.0.0/8` (internal Docker networks). When curling from inside the container, the connecting IP is `127.0.0.1` — which is not in that range — so nginx ignores the XFF header and `$remote_addr` stays as `127.0.0.1`.
+By default, `set_real_ip_from` trusts the private Docker network ranges listed in `nginx/default.conf`. When making requests from inside the container, the connecting IP is `127.0.0.1` — which is not in that range — so nginx ignores the XFF header and `$remote_addr` stays as `127.0.0.1`.
 
-To spoof IPs via `X-Forwarded-For` during local testing, patch the config to also trust localhost:
+To test blocked IPs using `X-Forwarded-For`, temporarily add
+`set_real_ip_from 127.0.0.1;` to the host's `nginx/default.conf` and recreate nginx:
 
 ```bash
-sed -i 's/set_real_ip_from 172.0.0.0\/8;/set_real_ip_from 172.0.0.0\/8;\nset_real_ip_from 127.0.0.1;/' /etc/nginx/conf.d/default.conf
-nginx -s reload
+docker compose up -d --force-recreate nginx-blacklist
 ```
 
-> This patch is temporary — it only affects the running container and is lost on restart.
+The nginx configuration is mounted read-only, so edit it on the host. Remove the
+localhost trust rule and recreate nginx again when testing is complete.
 
 ---
 
@@ -40,12 +41,12 @@ nginx -s reload
 
 **Allowed request (expect 200):**
 ```bash
-curl -s localhost/check_ip
+wget -S -O - http://localhost:8080/check_ip
 ```
 
 **Empty User-Agent — triggers `$blocked_ua` (expect 403):**
 ```bash
-curl -s -A "" localhost/check_ip
+wget -S -O - -U "" http://localhost:8080/check_ip
 ```
 
 ---
@@ -55,12 +56,12 @@ curl -s -A "" localhost/check_ip
 The nginx log format uses Traefik-forwarded headers to reconstruct the original client URL. Set them to get meaningful log output:
 
 ```bash
-curl -s -A "" \
-  -H "X-Forwarded-Method: GET" \
-  -H "X-Forwarded-Proto: https" \
-  -H "X-Forwarded-Host: myapp.example.com" \
-  -H "X-Forwarded-Uri: /admin/login" \
-  localhost/check_ip
+wget -S -O - -U "" \
+  --header "X-Forwarded-Method: GET" \
+  --header "X-Forwarded-Proto: https" \
+  --header "X-Forwarded-Host: myapp.example.com" \
+  --header "X-Forwarded-Uri: /admin/login" \
+  http://localhost:8080/check_ip
 ```
 
 Expected log line:
@@ -77,13 +78,13 @@ Expected log line:
 After applying the localhost trust patch above, spoof a blocked IP via `X-Forwarded-For`:
 
 ```bash
-curl -s \
-  -H "X-Forwarded-For: 1.2.3.4" \
-  -H "X-Forwarded-Method: GET" \
-  -H "X-Forwarded-Proto: https" \
-  -H "X-Forwarded-Host: myapp.example.com" \
-  -H "X-Forwarded-Uri: /secret" \
-  localhost/check_ip
+wget -S -O - \
+  --header "X-Forwarded-For: 1.2.3.4" \
+  --header "X-Forwarded-Method: GET" \
+  --header "X-Forwarded-Proto: https" \
+  --header "X-Forwarded-Host: myapp.example.com" \
+  --header "X-Forwarded-Uri: /secret" \
+  http://localhost:8080/check_ip
 ```
 
 Expected log line (if `1.2.3.4` is in the blocklist):

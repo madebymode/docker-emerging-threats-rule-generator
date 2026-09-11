@@ -1,21 +1,17 @@
 # Use a versioned Go Alpine image for building
-FROM golang:1.26.7-alpine3.23 AS build
+FROM golang:1.27.1-alpine3.24 AS build
 
 # Set the working directory
 WORKDIR /app
 
-# Install Git, build-base, and other dependencies
-RUN apk add --no-cache git openssh build-base tzdata
-
-# Copy the source code to the container
-COPY . .
-
-# Download the dependencies
+# Copy only build inputs; local configuration and credentials never enter a layer.
+COPY go.mod go.sum ./
 RUN go mod download
+COPY *.go ./
 
-# Enable CGO and build the binary
-ENV CGO_ENABLED=1
-RUN go build -o nginx_blacklist
+# This app needs no C libraries or runtime compiler toolchain.
+ENV CGO_ENABLED=0
+RUN go build -trimpath -ldflags="-s -w" -o nginx_blacklist
 
 # Use a smaller Alpine image for running the binary
 FROM alpine:3.24
@@ -30,7 +26,8 @@ COPY docker-cronjob /etc/periodic/daily/update_block_lists
 
 # Combine all of our run tasks for the smallest img possible
 # Install tzdata and other dependencies
-RUN apk add --no-cache tzdata su-exec \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache ca-certificates tzdata su-exec \
     && addgroup -S rites \
     && adduser -S anubis -G rites \
     && mkdir -p /app/nginx/conf /app/crontabs \
@@ -39,14 +36,14 @@ RUN apk add --no-cache tzdata su-exec \
     && chmod +x /etc/periodic/daily/update_block_lists \
     && ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime \
     && echo "America/New_York" > /etc/timezone \
-    && chown -R anubis:rites /app \
-    && chown root:root /app/crontabs \
+    && chown -R root:root /app \
+    && chmod 755 /app /app/nginx /app/crontabs \
+    && chown anubis:rites /app/nginx/conf \
     && echo "30 2 * * * /etc/periodic/daily/update_block_lists >> /proc/1/fd/1 2>&1" > /app/crontabs/root \
     && chmod 600 /app/crontabs/root \
     && chown root:root /app/crontabs/root
 
-# Use a volume to share Docker socket from the host
-VOLUME ["/var/run/docker.sock"]
+# Socket access is opt-in via an explicit bind mount, never an anonymous volume.
 
 # Set the entrypoint
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

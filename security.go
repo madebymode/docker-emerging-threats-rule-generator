@@ -25,6 +25,18 @@ const (
 // httpClient is a shared client with a hard timeout; the zero-value http.Client has no timeout.
 var httpClient = &http.Client{Timeout: httpTimeout}
 
+// Keep notification behavior (including private webhook endpoints) independent
+// from the stricter policy for remotely supplied IP lists.
+var downloadClient = &http.Client{
+	Timeout: httpTimeout,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return validateURLFunc(req.URL.String())
+	},
+}
+
 // validContainerName matches Docker container names: starts with alphanumeric, then allows
 // alphanumeric, hyphens, underscores, and periods — no path separators or shell metacharacters.
 var validContainerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
@@ -57,6 +69,9 @@ func init() {
 
 // isPrivateIP returns true if ip falls within any reserved/private range.
 func isPrivateIP(ip net.IP) bool {
+	if !ip.IsGlobalUnicast() {
+		return true
+	}
 	for _, ipNet := range privateIPNets {
 		if ipNet.Contains(ip) {
 			return true
@@ -109,7 +124,7 @@ func validateConfFilePath(filePath string) error {
 	clean := filepath.Clean(filePath)
 	allowedClean := filepath.Clean(allowedConfDir)
 	prefix := allowedClean + string(filepath.Separator)
-	if clean != allowedClean && !strings.HasPrefix(clean, prefix) {
+	if clean == allowedClean || !strings.HasPrefix(clean, prefix) {
 		return fmt.Errorf("nginx_conf_file_path %q is outside allowed directory %q", filePath, allowedConfDir)
 	}
 	return nil
@@ -131,7 +146,7 @@ func downloadFile(rawURL string) (string, error) {
 		return "", fmt.Errorf("URL validation failed: %v", err)
 	}
 
-	resp, err := httpClient.Get(rawURL)
+	resp, err := downloadClient.Get(rawURL)
 	if err != nil {
 		return "", err
 	}
@@ -141,9 +156,12 @@ func downloadFile(rawURL string) (string, error) {
 		return "", fmt.Errorf("error fetching URL %s: status code %d", rawURL, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
 	if err != nil {
 		return "", err
+	}
+	if len(body) > maxResponseSize {
+		return "", fmt.Errorf("response exceeds %d bytes", maxResponseSize)
 	}
 
 	return string(body), nil

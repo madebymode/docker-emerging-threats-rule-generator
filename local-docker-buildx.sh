@@ -69,7 +69,7 @@ export DOCKER_CLI_EXPERIMENTAL=enabled
 # Create a new builder instance
 docker buildx create --use builder
 
-TAG_NAME="mxmd/etr:v2"
+TAG_NAME="mxmd/etr:v3"
 
 # Disable the 'exit on error' behavior
 set +e
