@@ -1,56 +1,32 @@
-# Use a versioned Go Alpine image for building
 FROM golang:1.27.1-alpine3.24 AS build
 
-# Set the working directory
-WORKDIR /app
-
-# Copy only build inputs; local configuration and credentials never enter a layer.
+WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY *.go ./
 
-# This app needs no C libraries or runtime compiler toolchain.
-ENV CGO_ENABLED=0
-RUN go build -trimpath -ldflags="-s -w" -o nginx_blacklist
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/nginx_blacklist
 
-# Use a smaller Alpine image for running the binary
 FROM alpine:3.24
 
-# Set the working directory
-WORKDIR /app
-
-# Copy the binary from the build image
-COPY --from=build /app/nginx_blacklist .
-COPY docker-entrypoint.sh .
-COPY docker-cronjob /etc/periodic/daily/update_block_lists
-
-# Combine all of our run tasks for the smallest img possible
-# Install tzdata and other dependencies
-RUN apk upgrade --no-cache \
-    && apk add --no-cache ca-certificates tzdata su-exec \
-    && addgroup -S rites \
-    && adduser -S anubis -G rites \
-    && mkdir -p /app/nginx/conf /app/crontabs \
-    && chmod +x nginx_blacklist \
-    && chmod +x docker-entrypoint.sh \
-    && chmod +x /etc/periodic/daily/update_block_lists \
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S -g 987 etr-updater \
+    && adduser -S -D -H -u 1000 -G etr-updater etr-updater \
+    && mkdir -p /app/nginx/conf \
     && ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime \
     && echo "America/New_York" > /etc/timezone \
-    && chown -R root:root /app \
-    && chmod 755 /app /app/nginx /app/crontabs \
-    && chown anubis:rites /app/nginx/conf \
-    && echo "30 2 * * * /etc/periodic/daily/update_block_lists >> /proc/1/fd/1 2>&1" > /app/crontabs/root \
-    && chmod 600 /app/crontabs/root \
-    && chown root:root /app/crontabs/root
+    && chown -R etr-updater:etr-updater /app
 
-# Socket access is opt-in via an explicit bind mount, never an anonymous volume.
+COPY --from=build /out/nginx_blacklist /usr/local/bin/nginx_blacklist
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# Set the entrypoint
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+USER etr-updater
+WORKDIR /app
 
-# Run PID 1 as root so BusyBox crond can read the root-owned spool.
-# The entrypoint and cron wrapper run the ETR command as anubis by default.
-USER root
+# Daemon mode: the binary self-schedules its own runs (default 03:00 local
+# with up to 60min jitter). PID 1 is the Go binary — Docker's SIGTERM reaches
+# it directly for clean shutdown.
+ENV ETR_DAEMON=true
 
-# Default command runs crond
-CMD ["crond", "-f", "-d", "8", "-c", "/app/crontabs"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/usr/local/bin/nginx_blacklist"]

@@ -13,6 +13,7 @@ type Config struct {
 	RemoteBlocklists    []string `json:"remote_blocklists"`
 	ConfFilePath        string   `json:"nginx_conf_file_path"`
 	NginxContainerNames []string `json:"nginx_container_names"`
+	NginxServiceName    string   `json:"nginx_service_name"`
 }
 
 // readConfig reads the configuration from a JSON file

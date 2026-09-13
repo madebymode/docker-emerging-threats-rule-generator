@@ -9,20 +9,20 @@ stricter security behavior explicit for existing deployments.
 
 - Change `mxmd/etr:v2` to `mxmd/etr:v3` after the v3 image is published. The release
   workflow publishes v3 aliases and versioned tags; it does not update the v2 alias.
-- Copy the generator's `security_opt`, `cap_drop`, `cap_add`, and `pids_limit`
-  settings from `docker-compose.example.yml`. Root cron and startup need only
-  `CHOWN`, `DAC_OVERRIDE`, `SETUID`, and `SETGID`; the updater still runs as `anubis`
-  by default. `RUN_AS_ROOT=true` remains supported.
+- Copy the generator's `security_opt`, `cap_drop`, and `pids_limit` settings
+  from `docker-compose.example.yml`. The container runs entirely as the
+  unprivileged `etr-updater` user (uid 1000) with all Linux capabilities
+  dropped — no root, no capability adds, no privilege dropping at runtime.
+  `RUN_AS_ROOT` and `DOCKER_HOST_GID` are gone; use `group_add` in compose to
+  grant the container's uid access to the host Docker socket.
+- The image is now a self-scheduling daemon. It runs updates in-process at
+  `ETR_AT_HOUR` (default 03:00 local) with `ETR_JITTER_MINUTES` of jitter and
+  reacts to SIGTERM for clean shutdown. `crond` is no longer installed. Use
+  `docker exec <container> /usr/local/bin/nginx_blacklist --force` to trigger
+  an immediate one-shot update, or run `--force` directly to skip daemon mode.
 - Keep the generator's rules volume writable. Mount the rules volume and
   `default.conf` read-only in nginx. Edit nginx configuration on the host instead
   of from inside nginx. Generated rules are readable across different nginx UIDs.
-- `/app`, its executable files, and the cron spool are now root-owned. Custom
-  commands running as `anubis` must write to `/app/nginx/conf` or `/tmp`, rather
-  than modifying application files. Custom cron schedules require a root-owned
-  replacement spool with a root-owned `root` file (mode `0600`).
-- `DOCKER_HOST_GID` must be numeric. Existing groups with that GID are reused.
-  Startup stops on permission or group setup failures instead of continuing with
-  an incorrectly configured runtime.
 - Docker socket access requires an explicit bind mount. The image no longer
   declares an anonymous volume at `/var/run/docker.sock`.
 
@@ -91,8 +91,8 @@ self-hosted runners compatible with these Actions' Node runtimes.
 Direct Docker socket access grants control over the Docker host even when the
 container runs without root. Capability limits and a read-only socket bind do
 not constrain Docker API calls. For deployments that can reload nginx externally,
-set `RESTART_CONTAINERS=false` and omit the socket mount, `DOCKER_HOST_GID`, and
-`group_add`. Daily rule generation continues in this mode.
+set `RESTART_CONTAINERS=false` and omit the socket mount and `group_add`. Daily
+rule generation continues in this mode.
 
 Remote sources and outbound proxies remain trusted configuration. DNS is checked
 before each request and redirect; a DNS change between validation and connection
@@ -116,6 +116,7 @@ docker scout cves etr:hardening-test
 ```
 
 The smoke tests use disposable containers, fixture lists, no network access,
-and no Docker socket. They verify user switching, protected application files,
-GID mapping, generated rules, an actual scheduled cron update (up to 70 seconds),
-and unprivileged nginx filtering, whitelist exclusions, logging, and reloads.
+and no Docker socket. They verify the runtime user (`etr-updater`, uid 1000),
+dropped capabilities, `NoNewPrivs`, non-writable installed binaries, an actual
+`--force` update against a fixture config, and unprivileged nginx filtering,
+whitelist exclusions, logging, and reloads.

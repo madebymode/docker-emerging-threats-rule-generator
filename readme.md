@@ -128,7 +128,7 @@ grep docker /etc/group | cut -d: -f3
 # e.g. 1003
 ```
 
-Set both `DOCKER_HOST_GID` and `group_add` in `docker-compose.yml` to that value. The container starts BusyBox `crond` as root so it can read the cron spool, but the update command runs as the unprivileged `anubis` user by default. `group_add` grants that user access to the mounted Docker socket.
+Set `group_add` in `docker-compose.yml` to that GID. The container runs entirely as the unprivileged `etr-updater` user (uid 1000) — no root, no crond, no privilege dropping. `group_add` grants the container's user access to the mounted Docker socket.
 
 ### 4. Bring it up
 
@@ -288,9 +288,11 @@ environment:
 
 | Variable | Default | Description |
 |---|---|---|
-| `DOCKER_HOST_GID` | _(unset)_ | GID of the `docker` group on the host. For non-root socket access, set compose `group_add` to the same numeric value. Find it with `grep docker /etc/group \| cut -d: -f3`. |
-| `RUN_AS_ROOT` | `false` | Run update commands as root. By default, the container starts `crond` as root but executes the ETR update as `anubis`. |
-| `RESTART_CONTAINERS` | `true` | When `false`, skips all Docker socket access — only writes `blocklist.conf` and exits. Omit the `docker.sock` volume mount entirely in this mode. Use an external cron job or your orchestrator's reload hook to apply the updated file. |
+| `ETR_DAEMON` | `false` | When `true`, the binary self-schedules updates in-process instead of running once and exiting. Set in `docker-compose.yml` or the systemd unit. Ignored when `--force` is passed. |
+| `ETR_AT_HOUR` | `3` | Daemon mode only. Local-time hour (0–23) to run the daily update. Choose a low-traffic hour for the audience you protect. |
+| `ETR_JITTER_MINUTES` | `60` | Daemon mode only. Random delay window (0–240) added to `ETR_AT_HOUR` to spread load across deployments pulling from the same upstream blocklist sources. |
+| `ETR_RUN_ON_START` | `true` | Daemon mode only. When `false`, defers the first update to the next scheduled window. Ignored if the blocklist file does not yet exist — the daemon always builds an initial list on cold start. |
+| `RESTART_CONTAINERS` | `true` | When `false`, skips all Docker socket access — only writes `blocklist.conf` and exits. Omit the `docker.sock` volume mount entirely in this mode. Use your orchestrator's reload hook to apply the updated file. |
 | `BLOCKLIST_FAILURE_THRESHOLD` | `30` | Percentage of remote blocklist sources that must fail before the update is abandoned and the existing blocklist preserved. Set to `0` to always write even on partial failures; `100` to never abort early. |
 | `INSTANCE_NAME` | _(unset)_ | Optional label added to notification subjects — e.g. `[ETR prod-eu]`. Useful when running multiple deployments. |
 
@@ -316,11 +318,49 @@ Alerts fire when: (1) enough remote blocklist sources fail that the threshold is
 | `SMTP_USER` | _(unset)_ | SMTP username — omit for unauthenticated relay. |
 | `SMTP_PASS` | _(unset)_ | SMTP password. |
 
+**Slack (bot)**
+
+| Variable | Default | Description |
+|---|---|---|
+| `SLACK_BOT_TOKEN` | _(unset)_ | Bot User OAuth token (starts with `xoxb-`). Requires the `chat:write` scope. Invite the bot to the target channel. |
+| `SLACK_CHANNEL_ID` | _(unset)_ | Channel ID (e.g. `C0123ABC456`) — use the channel ID, not the `#name`. Find it in Slack via *View channel details → About → (bottom)*. |
+
 **Webhook**
 
 | Variable | Default | Description |
 |---|---|---|
 | `WEBHOOK_URL` | _(unset)_ | URL to POST `{"subject":"…","body":"…"}` (JSON) on notable events. |
+
+**Standard Webhooks (signed)**
+
+Signs each POST per the [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks) spec — receivers verify with `webhook-id`, `webhook-timestamp`, and `webhook-signature: v1,<base64>` headers over the canonical string `<msg_id>.<timestamp>.<raw_body>`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `STANDARD_WEBHOOK_URL` | _(unset)_ | Destination URL. Both URL and SECRET must be set to enable. |
+| `STANDARD_WEBHOOK_SECRET` | _(unset)_ | HMAC key. Accepts `whsec_<base64>` (per spec — decoded before use) or a bare string. |
+| `STANDARD_WEBHOOK_FROM` | `INSTANCE_NAME` → `ETR` | Value sent as `data.from` in the envelope. |
+| `STANDARD_WEBHOOK_EVENT_TYPE` | `slack.notification` | Envelope `type`. Receivers route on this; use whatever hierarchical identifier the receiver expects (e.g. `slack.notification`, `slack.alert`). |
+| `STANDARD_WEBHOOK_SLACK_CHANNEL_ID` | _(unset)_ | Optional per-sender Slack channel override. Preferred over the name — stable across renames. |
+| `STANDARD_WEBHOOK_SLACK_CHANNEL_NAME` | _(unset)_ | Optional Slack channel name override. Used only when the ID is unset. |
+
+Payload shape (envelope, camelCase fields):
+
+```json
+{
+  "type": "slack.notification",
+  "timestamp": "<RFC 3339>",
+  "data": {
+    "from": "<from>",
+    "body": "<body>",
+    "title": "<subject>",
+    "slackChannelId": "<optional>",
+    "slackChannelName": "<optional>"
+  }
+}
+```
+
+For interop with mode-iris: point `STANDARD_WEBHOOK_URL` at `https://<iris>/messaging/standard` and share the same secret.
 
 ---
 
@@ -340,16 +380,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - SETUID
-      - SETGID
     pids_limit: 128
-    environment:
-      - DOCKER_HOST_GID=1003   # grep docker /etc/group | cut -d: -f3
     group_add:
-      - "1003"                 # match DOCKER_HOST_GID for docker.sock access
+      - "1003"                 # host docker GID: grep docker /etc/group | cut -d: -f3
     volumes:
       - ./config.json:/app/config.json:ro
       - nginx-blocking-rules:/app/nginx/conf/
@@ -422,17 +455,10 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - SETUID
-      - SETGID
     pids_limit: 128
-    restart: always
-    environment:
-      - DOCKER_HOST_GID=1003
+    restart: unless-stopped
     group_add:
-      - "1003"
+      - "1003"                 # host docker GID: grep docker /etc/group | cut -d: -f3
     volumes:
       - ./etr/config.json:/app/config.json:ro
       - nginx-blocking-rules:/app/nginx/conf/

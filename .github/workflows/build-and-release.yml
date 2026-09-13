@@ -84,12 +84,21 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Build native Linux binaries
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: |
+          GOARCH=amd64 go build -tags native -trimpath -ldflags="-s -w" -o etr-linux-amd64 .
+          GOARCH=arm64 go build -tags native -trimpath -ldflags="-s -w" -o etr-linux-arm64 .
+
       - name: Create Release
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           tag: ${{ steps.release_tag.outputs.tag }}
           name: Release ${{ steps.release_tag.outputs.tag }}
           commit: ${{ github.sha }}
+          artifacts: "etr-linux-amd64,etr-linux-arm64"
           body: |
             ## Cross-Platform Release ${{ steps.release_tag.outputs.tag }}
 
@@ -106,6 +115,17 @@ jobs:
             The Docker image supports:
             - linux/amd64
             - linux/arm64
+
+            ### Native Linux Binaries (Ubuntu LTS 20.04 / 22.04 / 24.04 / 26.04 and any systemd distro)
+            Statically linked — no Docker required. Self-scheduling daemon: one long-running
+            process that runs updates at 03:00 local (default) with jitter, no systemd timer needed.
+            Use `etr-linux --force` to trigger an immediate one-shot update.
+            - `etr-linux-amd64`
+            - `etr-linux-arm64`
+
+            Install to `/usr/local/bin/etr-linux`, create `/etc/etr/config.json`, then copy the unit files from `deploy/systemd/`.
+            - Generic nginx: `etr.service`
+            - ServerPilot: `etr-serverpilot.service`
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
           prerelease: false

@@ -1,0 +1,39 @@
+[Unit]
+Description=Emerging Threats Rule Generator (self-scheduling daemon)
+Documentation=https://github.com/mxmd/etr
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/etr-linux
+Restart=on-failure
+RestartSec=60s
+
+# Daemon mode: the binary self-schedules its own runs (default 03:00 local
+# with up to 60min jitter). No systemd timer needed. Use `etr-linux --force`
+# from a shell to trigger an immediate one-shot update.
+Environment=ETR_DAEMON=true
+Environment=NGINX_CONF_DIR=/etc/nginx/conf.d
+
+# Optional overrides — create /etc/etr/etr.env and set vars there.
+# Example: INSTANCE_NAME=prod, BLOCKLIST_FAILURE_THRESHOLD=20,
+#          ETR_AT_HOUR=3, ETR_JITTER_MINUTES=60, ETR_RUN_ON_START=false
+EnvironmentFile=-/etc/etr/etr.env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=etr
+
+# Hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/etc/nginx/conf.d /etc/etr
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target
