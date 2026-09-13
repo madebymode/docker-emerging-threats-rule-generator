@@ -2,15 +2,13 @@ version: '3'
 
 services:
   emerging-threats-rules:
-    # change the GID to match the docker group on the host - using "grep docker /etc/group | cut -d: -f3"
     environment:
-      - DOCKER_HOST_GID=1000
-      - RUN_AS_ROOT=false
       # Set RESTART_CONTAINERS=false to disable Docker socket usage.
       # When false, the container only writes blocklist.conf and exits without
       # restarting any containers. The docker.sock volume mount can be removed.
-      # Use an external cron or orchestrator to reload nginx instead.
+      # Use your orchestrator's reload hook to apply the updated file.
       - RESTART_CONTAINERS=true
+    # Match the docker group on the host: grep docker /etc/group | cut -d: -f3
     group_add:
       - "1000"
     image: mxmd/etr:v3
@@ -18,12 +16,6 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # Volume ownership and cron's switch to the unprivileged updater.
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - SETUID
-      - SETGID
     pids_limit: 128
     build: .
     volumes:

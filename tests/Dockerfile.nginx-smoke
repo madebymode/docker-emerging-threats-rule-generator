@@ -1,7 +1,7 @@
 ARG ETR_IMAGE=etr:hardening-test
 FROM ${ETR_IMAGE} AS rules
-COPY tests/nginx-fixture.json /app/config.json
-RUN RESTART_CONTAINERS=false /app/docker-entrypoint.sh true
+COPY --chown=etr-updater:etr-updater tests/nginx-fixture.json /app/config.json
+RUN RESTART_CONTAINERS=false /usr/local/bin/nginx_blacklist --force
 
 FROM nginxinc/nginx-unprivileged:alpine-slim
 COPY --from=rules /app/nginx/conf/blocklist.conf /etc/nginx/conf.d/blocklist.conf

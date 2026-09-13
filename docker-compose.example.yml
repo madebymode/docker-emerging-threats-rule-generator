@@ -1,38 +1,35 @@
 version: '3'
 
 # Quick-start compose for emerging-threats-rules + nginx.
-# Copy this to docker-compose.yml and adjust DOCKER_HOST_GID before running.
+# Copy this to docker-compose.yml and adjust group_add before running.
 #
 # Usage:
 #   1. Copy config.example.json → config.json and set nginx_container_names: ["nginx-blacklist"]
 #   2. Download nginx/default.conf (see README Quick Start step 2)
-#   3. Set DOCKER_HOST_GID and group_add: grep docker /etc/group | cut -d: -f3
-#   4. docker compose up emerging-threats-rules
-#   5. docker compose up -d nginx-blacklist log-manager
+#   3. Set group_add to the host docker GID: grep docker /etc/group | cut -d: -f3
+#   4. docker compose up -d emerging-threats-rules nginx-blacklist log-manager
 #
 # For Traefik integration see examples/traefik-v3/docker-compose.yml
 
 services:
   emerging-threats-rules:
     image: mxmd/etr:v3
+    # Container runs as etr-updater (uid 1000, gid 987) — no root, no capabilities.
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # Volume ownership and cron's switch to the unprivileged updater.
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - SETUID
-      - SETGID
     pids_limit: 128
     environment:
-      - DOCKER_HOST_GID=1003   # grep docker /etc/group | cut -d: -f3
       - RESTART_CONTAINERS=true
+    # Grant etr-updater membership in the host docker group so it can talk to docker.sock.
+    # Look up your host's docker GID: grep docker /etc/group | cut -d: -f3
     group_add:
-      - "1003"                 # match DOCKER_HOST_GID for docker.sock access
+      - "1003"
     volumes:
       - ./config.json:/app/config.json:ro
+      # Named volume: first-run ownership is inherited from the image (etr-updater:etr-updater).
+      # If using a bind mount, chown the host dir first: sudo chown -R 1000:987 <path>
       - nginx-blocking-rules:/app/nginx/conf/
       - /var/run/docker.sock:/var/run/docker.sock
 

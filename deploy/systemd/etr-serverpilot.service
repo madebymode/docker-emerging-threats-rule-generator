@@ -1,0 +1,40 @@
+[Unit]
+Description=Emerging Threats Rule Generator (ServerPilot, self-scheduling daemon)
+Documentation=https://github.com/mxmd/etr
+After=network-online.target nginx-sp.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/etr-linux
+Restart=on-failure
+RestartSec=60s
+
+# Daemon mode: the binary self-schedules its own runs (default 03:00 local
+# with up to 60min jitter). Use `etr-linux --force` for an immediate run.
+Environment=ETR_DAEMON=true
+
+# ServerPilot-specific paths and service name.
+# Set nginx_conf_file_path in /etc/etr/config.json to:
+#   /etc/nginx-sp/vhosts.d/APPNAME.d/blocklist.conf
+Environment=NGINX_CONF_DIR=/etc/nginx-sp/vhosts.d
+Environment=NGINX_SERVICE=nginx-sp
+
+EnvironmentFile=-/etc/etr/etr.env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=etr
+
+# Hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/etc/nginx-sp/vhosts.d /etc/etr
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target
