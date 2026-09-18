@@ -21,7 +21,7 @@ func TestRestartUsesDockerAPI(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 	defer server.Close()
-	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.56"))
+	cli, err := client.New(client.WithHost(server.URL), client.WithAPIVersion("1.56"))
 	if err != nil {
 		t.Fatal(err)
 	}
