@@ -26,7 +26,7 @@ func testNginxConfig(_ *Config) error {
 // If a container fails to come back up (e.g. because of a bad config file we just
 // wrote), the caller in applyBlocklist rolls back and retries.
 func reloadNginx(config *Config) error {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return fmt.Errorf("failed to create Docker client: %v", err)
 	}
