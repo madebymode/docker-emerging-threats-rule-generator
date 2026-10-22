@@ -28,7 +28,7 @@ stricter security behavior explicit for existing deployments.
 
 ## Nginx now runs without root
 
-All examples use `nginxinc/nginx-unprivileged:alpine-slim`, with all capabilities
+All examples use `nginx/nginx-unprivileged:alpine-slim`, with all capabilities
 removed, no-new-privileges, a read-only root filesystem, and writable temporary
 storage in `/tmp`. The upstream image listens on port 8080 and keeps its PID and
 temporary files in `/tmp`; see the [upstream image documentation](https://github.com/nginx/docker-nginx-unprivileged).
