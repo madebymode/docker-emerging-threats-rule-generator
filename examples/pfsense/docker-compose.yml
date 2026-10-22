@@ -38,7 +38,7 @@ services:
     container_name: etr-nginx-proxy
     depends_on:
       - etr-downloader
-    image: nginxinc/nginx-unprivileged:alpine-slim
+    image: nginx/nginx-unprivileged:alpine-slim
     read_only: true
     security_opt:
       - no-new-privileges:true

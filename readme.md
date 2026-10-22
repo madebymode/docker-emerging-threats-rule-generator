@@ -389,7 +389,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 
   nginx-blacklist:
-    image: nginxinc/nginx-unprivileged:alpine-slim
+    image: nginx/nginx-unprivileged:alpine-slim
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -465,7 +465,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 
   etr-blocker-nginx:
-    image: nginxinc/nginx-unprivileged:alpine-slim
+    image: nginx/nginx-unprivileged:alpine-slim
     read_only: true
     security_opt:
       - no-new-privileges:true
