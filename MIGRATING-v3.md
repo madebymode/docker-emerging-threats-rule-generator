@@ -71,24 +71,26 @@ The client negotiates the daemon API version automatically unless
 `DOCKER_API_VERSION` is set.
 
 Builds require Go 1.27.3. CI reads the version from `go.mod`; the Docker builder
-uses the same version. The binary is built without CGO. Build contexts include
-only source and build inputs, excluding local configuration, credentials, and
-Git history. Runtime Alpine packages are upgraded during image construction;
+uses the same version. The Dockerfile tracks the latest stable Dockerfile v1
+frontend and caches downloaded modules and compiled packages with BuildKit. The
+binary is built without CGO. Build contexts include only source and build inputs,
+excluding local configuration, credentials, and Git history. Runtime Alpine
+packages are upgraded during image construction;
 use `docker build --pull --no-cache` when rebuilding for newly published package
 fixes so an old package-install layer is not reused.
 
-GitHub Actions were updated to their latest published releases on 2026-09-11 and
+GitHub Actions were updated to their latest published releases on 2026-10-24 and
 pinned to commit hashes:
 
 | Action | Release |
 | --- | --- |
 | actions/checkout | [v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) |
 | actions/setup-go | [v7.0.0](https://github.com/actions/setup-go/releases/tag/v7.0.0) |
-| docker/login-action | [v4.6.0](https://github.com/docker/login-action/releases/tag/v4.6.0) |
+| docker/login-action | [v4.7.0](https://github.com/docker/login-action/releases/tag/v4.7.0) |
 | docker/metadata-action | [v6.2.0](https://github.com/docker/metadata-action/releases/tag/v6.2.0) |
-| docker/setup-qemu-action | [v4.3.0](https://github.com/docker/setup-qemu-action/releases/tag/v4.3.0) |
-| docker/setup-buildx-action | [v4.3.0](https://github.com/docker/setup-buildx-action/releases/tag/v4.3.0) |
-| docker/build-push-action | [v7.3.0](https://github.com/docker/build-push-action/releases/tag/v7.3.0) |
+| docker/setup-qemu-action | [v4.4.0](https://github.com/docker/setup-qemu-action/releases/tag/v4.4.0) |
+| docker/setup-buildx-action | [v4.4.1](https://github.com/docker/setup-buildx-action/releases/tag/v4.4.1) |
+| docker/build-push-action | [v7.4.0](https://github.com/docker/build-push-action/releases/tag/v7.4.0) |
 | ncipollo/release-action | [v1.21.0](https://github.com/ncipollo/release-action/releases/tag/v1.21.0) |
 
 The workflows use GitHub-hosted `ubuntu-latest` runners. Keep any replacement
