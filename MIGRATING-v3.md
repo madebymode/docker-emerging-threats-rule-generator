@@ -70,7 +70,7 @@ using their module versions, not Docker Engine release tags such as
 The client negotiates the daemon API version automatically unless
 `DOCKER_API_VERSION` is set.
 
-Builds require Go 1.27.1. CI reads the version from `go.mod`; the Docker builder
+Builds require Go 1.27.3. CI reads the version from `go.mod`; the Docker builder
 uses the same version. The binary is built without CGO. Build contexts include
 only source and build inputs, excluding local configuration, credentials, and
 Git history. Runtime Alpine packages are upgraded during image construction;
