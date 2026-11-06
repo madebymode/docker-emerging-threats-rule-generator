@@ -25,6 +25,11 @@ func preflight() error {
 	return checkRuntime(os.Geteuid(), allowedConfDir)
 }
 
+// selfUpdate is native-only: containers are updated by pulling a new image.
+func selfUpdate() error {
+	return fmt.Errorf("self-update is not available in the Docker image; pull a new image instead")
+}
+
 func checkRuntime(euid int, confDir string) error {
 	if euid == 0 {
 		return fmt.Errorf("container is running as root. This image is designed to run as uid 1000 (etr-updater). " +
