@@ -32,12 +32,29 @@ jobs:
       - name: Test
         run: |
           go test ./...
+          go test -tags native ./...
           go test -race -short ./...
+          go test -tags native -race -short ./...
 
       - name: Vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          go vet -tags native ./...
+
+      - name: Lint shell scripts
+        run: shellcheck -S warning deploy/install.sh scripts/*.sh
 
       - name: Build and smoke-test Docker image
         run: |
           docker build --pull -t etr:hardening-test .
           sh tests/docker-smoke.sh etr:hardening-test
+
+  policies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and check SELinux and AppArmor policies
+        run: scripts/check-policies.sh dist

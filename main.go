@@ -57,7 +57,7 @@ func main() {
 
 	// Validate the output path before touching the network — fail fast.
 	if err := validateConfFilePath(config.ConfFilePath); err != nil {
-		logf("Invalid nginx_conf_file_path in config: %v\n", err)
+		logf("Invalid nginx_conf_file_path in config: %v\n%s\n", err, confPathHint)
 		os.Exit(1)
 	}
 
@@ -73,6 +73,8 @@ func main() {
 	logf("Daemon mode: self-scheduling updates in-process\n")
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	reexec := reexecSignals()
+	daemonStarted()
 
 	// Fresh install should get a blocklist immediately; users deploying at peak
 	// hours can set ETR_RUN_ON_START=false to defer the first run to the window.
@@ -103,6 +105,12 @@ func main() {
 			timer.Stop()
 			logf("Received shutdown signal, exiting daemon\n")
 			return
+		case <-reexec:
+			// Self-update installed a new binary. A SIGHUP that arrives
+			// during an update waits here until that update finishes.
+			timer.Stop()
+			reexecSelf()
+			continue
 		case <-timer.C:
 		}
 

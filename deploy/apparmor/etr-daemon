@@ -1,0 +1,42 @@
+# AppArmor profile for the ETR daemon (etr.service sets AppArmorProfile=).
+# Install: see native-install.md. Local additions: /etc/apparmor.d/local/etr-daemon
+#include <tunables/global>
+
+profile etr-daemon flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/ssl_certs>
+
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network netlink raw,
+
+  signal (receive) peer=unconfined,
+  signal (receive) set=(hup) peer=etr-update,
+  ptrace (readby) peer=etr-update,
+
+  # Its own binary: map and re-exec in this profile, never write.
+  /opt/etr/bin/ r,
+  /opt/etr/bin/etr-linux mrix,
+  deny /opt/etr/bin/** wl,
+
+  /etc/etr/ r,
+  /etc/etr/config.json r,
+
+  # Staged blocklist, its temp files and etr.pid.
+  /var/lib/etr/ r,
+  /var/lib/etr/** rwk,
+
+  # etr-apply's result.
+  /var/lib/etr-apply/status.json r,
+
+  # Go runtime: GOMAXPROCS from the cgroup CPU limit, huge page size.
+  @{PROC}/@{pid}/cgroup r,
+  @{PROC}/@{pid}/mountinfo r,
+  /sys/fs/cgroup/** r,
+  /sys/kernel/mm/transparent_hugepage/hpage_pmd_size r,
+
+  #include <local/etr-daemon>
+}

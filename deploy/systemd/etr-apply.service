@@ -1,0 +1,52 @@
+[Unit]
+Description=Validate the staged ETR blocklist and install it into nginx
+Documentation=https://github.com/madebymode/docker-emerging-threats-rule-generator/blob/master/native-install.md
+
+[Service]
+Type=oneshot
+# The only root part of ETR. It rejects any staged file that is not plain
+# `<ip-or-cidr> <label>;` entries in one geo block, then installs it, runs
+# `nginx -t`, reloads nginx, and restores the previous file on failure.
+# Installed by hand and never replaced by self-update.
+ExecStart=/usr/local/sbin/etr-apply
+
+# Defaults for distro/nginx.org nginx. Override in /etc/etr/apply.env, e.g.
+# for ServerPilot:
+#   ETR_LIVE_FILE=/etc/nginx-sp/http.d/etr-blocklist.conf
+#   NGINX_BIN=nginx-sp
+#   NGINX_SERVICE=nginx-sp
+Environment=ETR_LIVE_FILE=/etc/nginx/conf.d/blocklist.conf
+Environment=NGINX_BIN=nginx
+Environment=NGINX_SERVICE=nginx
+EnvironmentFile=-/etc/etr/apply.env
+
+# /var/lib/etr-apply/status.json: the result the daemon waits for. Root owned,
+# so the daemon can read it but not forge it.
+StateDirectory=etr-apply
+StateDirectoryMode=0755
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=etr-apply
+
+AppArmorProfile=-etr-apply
+
+# Hardening that still lets `nginx -t` read TLS keys, create its temp
+# directories and open its logs. ProtectSystem=full leaves /var writable and
+# /etc read-only, so list each nginx include directory etr-apply may write;
+# add yours with a drop-in if ETR_LIVE_FILE lives elsewhere.
+ReadWritePaths=-/etc/nginx/conf.d -/etc/nginx-sp/http.d
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_SETUID CAP_SETGID

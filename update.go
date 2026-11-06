@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -41,23 +42,29 @@ type githubRelease struct {
 	Prerelease bool   `json:"prerelease"`
 }
 
-// Indirection so tests can exercise installation without systemd.
-var restartService = func(name string) error {
-	out, err := exec.Command("systemctl", "restart", name).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("systemctl restart %s: %v\n%s", name, err, out)
-	}
-	return nil
-}
+// Indirection so tests can exercise installation without a running daemon.
+var signalDaemon = signalRunningDaemon
 
-var serviceHealthy = func(name string) bool {
-	time.Sleep(10 * time.Second)
-	return exec.Command("systemctl", "is-active", "--quiet", name).Run() == nil
+// daemonHealthy waits for the daemon to re-exec onto exe and stay up. A
+// daemon in the middle of an update handles SIGHUP only once it finishes.
+var daemonHealthy = func(pid int, exe string) bool {
+	deadline := time.Now().Add(15 * time.Minute)
+	for time.Now().Before(deadline) {
+		time.Sleep(5 * time.Second)
+		if runsBinary(pid, exe) {
+			time.Sleep(10 * time.Second)
+			return runsBinary(pid, exe)
+		}
+		if !runsBinary(pid, exe+" (deleted)") {
+			return false // exited, or exec failed and it died
+		}
+	}
+	return false
 }
 
 // selfUpdate installs the newest eligible signed release over the running
 // binary. Settings come from the environment (see native-install.md):
-// ETR_AUTO_UPDATE, ETR_UPDATE_PIN, ETR_UPDATE_DELAY_HOURS, ETR_SERVICE.
+// ETR_AUTO_UPDATE, ETR_UPDATE_PIN, ETR_UPDATE_DELAY_HOURS.
 func selfUpdate() error {
 	if os.Getenv("ETR_AUTO_UPDATE") == "false" {
 		logf("ETR_AUTO_UPDATE=false: self-update disabled\n")
@@ -136,7 +143,7 @@ func selfUpdate() error {
 	if err != nil {
 		return err
 	}
-	return installBinary(exe, []byte(binary), want, target, os.Getenv("ETR_SERVICE"))
+	return installBinary(exe, []byte(binary), want, target)
 }
 
 func parseReleaseKeys(data []byte) ([]ed25519.PublicKey, error) {
@@ -236,8 +243,8 @@ func shouldInstall(current, target string, pinned bool) bool {
 }
 
 // installBinary atomically replaces exe, keeping the previous binary as
-// exe.prev, and rolls back if the service does not come back up.
-func installBinary(exe string, binary []byte, wantSHA256, tag, service string) error {
+// exe.prev, and rolls back if the daemon does not come back up on it.
+func installBinary(exe string, binary []byte, wantSHA256, tag string) error {
 	sum := sha256.Sum256(binary)
 	if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, wantSHA256) {
 		return fmt.Errorf("downloaded binary sha256 %s does not match signed manifest %s", got, wantSHA256)
@@ -286,23 +293,57 @@ func installBinary(exe string, binary []byte, wantSHA256, tag, service string) e
 	}
 	logf("Installed %s over %s (previous binary kept at %s)\n", tag, version, prev)
 
-	if service == "" {
-		service = "etr"
-	}
-	if service == "none" {
+	pid, err := signalDaemon(exe)
+	if err != nil {
+		logf("Could not signal the daemon (%v); it will run %s from its next start\n", err, tag)
 		return nil
 	}
-	if err := restartService(service); err == nil && serviceHealthy(service) {
-		logf("%s restarted on %s\n", service, tag)
+	if pid == 0 {
+		logf("Daemon is not running; it will run %s from its next start\n", tag)
+		return nil
+	}
+	if daemonHealthy(pid, exe) {
+		logf("Daemon (pid %d) re-executed on %s\n", pid, tag)
 		return nil
 	}
 
-	logf("%s did not come back up on %s; rolling back to %s\n", service, tag, version)
+	// If the new binary crashed, systemd restarts the unit from exe, which is
+	// the old binary again once it is restored.
+	logf("Daemon did not come back up on %s; rolling back to %s\n", tag, version)
 	if err := os.Rename(prev, exe); err != nil {
 		return fmt.Errorf("rollback failed, restore %s manually: %v", prev, err)
 	}
-	if err := restartService(service); err != nil {
-		return fmt.Errorf("rolled back, but restart failed: %v", err)
+	if _, err := signalDaemon(exe); err != nil {
+		logf("Rolled back; signalling the daemon failed: %v\n", err)
 	}
-	return fmt.Errorf("update to %s rolled back: %s failed to start", tag, service)
+	return fmt.Errorf("update to %s rolled back: daemon did not stay up", tag)
+}
+
+// signalRunningDaemon sends SIGHUP to the daemon recorded in its pid file so
+// it re-executes exe. It returns 0 when no daemon is running from exe. The
+// updater runs as the same unprivileged user, so it needs no systemd access.
+func signalRunningDaemon(exe string) (int, error) {
+	data, err := os.ReadFile(pidFile())
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 1 {
+		return 0, fmt.Errorf("invalid pid in %s", pidFile())
+	}
+	// The binary was just renamed over, so a daemon still on the old code
+	// shows the old file as deleted. Anything else is a stale pid file.
+	if !runsBinary(pid, exe) && !runsBinary(pid, exe+" (deleted)") {
+		return 0, nil
+	}
+	return pid, syscall.Kill(pid, syscall.SIGHUP)
+}
+
+// runsBinary reports whether process pid is executing the file at exe.
+func runsBinary(pid int, exe string) bool {
+	target, err := os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
+	return err == nil && target == exe
 }

@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"nginx_blacklist/internal/blocklistfmt"
 )
 
 func TestDownloadRejectsUnsafeRedirects(t *testing.T) {
@@ -171,5 +173,36 @@ func TestIsSingleHost(t *testing.T) {
 		if got := isSingleHost(addr); got != want {
 			t.Errorf("isSingleHost(%q) = %v, want %v", addr, got, want)
 		}
+	}
+}
+
+// etr-apply runs as root and accepts only blocklistfmt's grammar, so every
+// file the generator can produce must pass it, including whitelist splits,
+// IPv6 and labels from hostile URLs.
+func TestGeneratorOutputPassesApplyGrammar(t *testing.T) {
+	original := allowedConfDir
+	allowedConfDir = t.TempDir()
+	t.Cleanup(func() { allowedConfDir = original })
+	target := filepath.Join(allowedConfDir, "blocklist.conf")
+	blocklist := map[string][]string{
+		"1.2.3.0/24":    {"local_blocklist", "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"},
+		"5.6.7.8":       {"https://raw.githubusercontent.com/stamparm/ipsum/master/levels/5.txt"},
+		"2001:db8::/48": {"https://example.com/%22%7D%3Binclude%20x%3B.txt"},
+		"9.9.9.9":       {"https://example.com/0"},
+	}
+	whitelist := map[string]string{"1.2.3.4": "local_whitelist"}
+	if err := writeBlocklistFile(whitelist, blocklist, target); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := blocklistfmt.Validate(data, 1000)
+	if err != nil {
+		t.Fatalf("etr-apply would reject generator output: %v\n%s", err, data)
+	}
+	if n < len(blocklist) {
+		t.Fatalf("validated %d entries, want at least %d", n, len(blocklist))
 	}
 }

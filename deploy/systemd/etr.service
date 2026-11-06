@@ -1,39 +1,68 @@
 [Unit]
 Description=Emerging Threats Rule Generator (self-scheduling daemon)
 Documentation=https://github.com/madebymode/docker-emerging-threats-rule-generator/blob/master/native-install.md
-After=network-online.target nginx.service
-Wants=network-online.target
+After=network-online.target etr-apply.path
+Wants=network-online.target etr-apply.path
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/etr-linux
+# Unprivileged: the daemon downloads and parses lists from the internet, so it
+# can write only its state directory. etr-apply (root) validates each staged
+# blocklist and installs it into nginx. Never run this binary as root.
+User=etr
+Group=etr
+ExecStart=/opt/etr/bin/etr-linux
 Restart=on-failure
 RestartSec=60s
 
 # Daemon mode: the binary self-schedules its own runs (default 03:00 local
-# with up to 60min jitter). No systemd timer needed. Use `etr-linux --force`
-# from a shell to trigger an immediate one-shot update.
+# with up to 60min jitter). Run an update now with `systemctl restart etr`.
 Environment=ETR_DAEMON=true
-Environment=NGINX_CONF_DIR=/etc/nginx/conf.d
 
 # Optional overrides — create /etc/etr/etr.env and set vars there.
 # Example: INSTANCE_NAME=prod, BLOCKLIST_FAILURE_THRESHOLD=20,
 #          ETR_AT_HOUR=3, ETR_JITTER_MINUTES=60, ETR_RUN_ON_START=false
 EnvironmentFile=-/etc/etr/etr.env
 
+# /var/lib/etr: staged blocklist.conf and etr.pid. Only root and etr read it.
+StateDirectory=etr
+StateDirectoryMode=0750
+UMask=0022
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=etr
 
-# Hardening
+# Mandatory access control, when the policies from deploy/ are installed.
+# The leading "-" keeps the unit working on hosts without them.
+AppArmorProfile=-etr-daemon
+
+# Hardening. Directives newer than the host's systemd (RHEL 8 has 239) are
+# skipped with a warning in the journal.
 NoNewPrivileges=yes
-PrivateTmp=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
 ProtectHome=yes
-ProtectSystem=full
-ReadWritePaths=/etc/nginx/conf.d /etc/etr
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

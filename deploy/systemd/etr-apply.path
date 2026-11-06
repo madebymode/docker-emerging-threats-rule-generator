@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch for new ETR blocklists
+Documentation=https://github.com/madebymode/docker-emerging-threats-rule-generator/blob/master/native-install.md
+
+[Path]
+# The daemon writes a hidden temp file and renames it over this path, which
+# triggers etr-apply.service once per new blocklist.
+PathChanged=/var/lib/etr/blocklist.conf
+Unit=etr-apply.service
+
+[Install]
+WantedBy=multi-user.target

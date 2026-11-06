@@ -1,3 +1,22 @@
 config.json
 .idea/*
 docker-compose.override.yml
+
+# Compiled application and release binaries.
+/nginx_blacklist
+/nginx_blacklist.exe
+/etr-linux
+/etr-linux-*
+/etr-apply
+/etr-apply.exe
+
+# Build output directories (at any depth).
+bin/
+build/
+dist/
+out/
+
+# Compiled executables and Go test binaries.
+*.exe
+*.test
+*.out

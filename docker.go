@@ -30,6 +30,15 @@ func selfUpdate() error {
 	return fmt.Errorf("self-update is not available in the Docker image; pull a new image instead")
 }
 
+const confPathHint = "Mount the shared nginx volume at /app/nginx/conf and write the blocklist inside it."
+
+// The daemon hooks below support native self-update and do nothing here.
+func daemonStarted() {}
+
+func reexecSignals() <-chan os.Signal { return nil }
+
+func reexecSelf() {}
+
 func checkRuntime(euid int, confDir string) error {
 	if euid == 0 {
 		return fmt.Errorf("container is running as root. This image is designed to run as uid 1000 (etr-updater). " +

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -156,9 +157,9 @@ func digest(b []byte) string {
 }
 
 func TestInstallBinary(t *testing.T) {
-	origRestart, origHealthy := restartService, serviceHealthy
-	defer func() { restartService, serviceHealthy = origRestart, origHealthy }()
-	restartService = func(string) error { return nil }
+	origSignal, origHealthy := signalDaemon, daemonHealthy
+	defer func() { signalDaemon, daemonHealthy = origSignal, origHealthy }()
+	signalDaemon = func(string) (int, error) { return 4242, nil }
 
 	setup := func(t *testing.T) string {
 		exe := filepath.Join(t.TempDir(), "etr-linux")
@@ -176,10 +177,10 @@ func TestInstallBinary(t *testing.T) {
 	}
 
 	t.Run("success", func(t *testing.T) {
-		serviceHealthy = func(string) bool { return true }
+		daemonHealthy = func(int, string) bool { return true }
 		exe := setup(t)
 		bin := fakeBinary("v3.1.0")
-		if err := installBinary(exe, bin, digest(bin), "v3.1.0", ""); err != nil {
+		if err := installBinary(exe, bin, digest(bin), "v3.1.0"); err != nil {
 			t.Fatal(err)
 		}
 		if got := installedTag(t, exe); got != "v3.1.0" {
@@ -193,7 +194,7 @@ func TestInstallBinary(t *testing.T) {
 	t.Run("digest mismatch leaves binary untouched", func(t *testing.T) {
 		exe := setup(t)
 		bin := fakeBinary("v3.1.0")
-		if err := installBinary(exe, bin, digest([]byte("other")), "v3.1.0", ""); err == nil {
+		if err := installBinary(exe, bin, digest([]byte("other")), "v3.1.0"); err == nil {
 			t.Fatal("mismatched digest accepted")
 		}
 		if got := installedTag(t, exe); got != "v3.0.0" {
@@ -204,7 +205,7 @@ func TestInstallBinary(t *testing.T) {
 	t.Run("wrong version leaves binary untouched", func(t *testing.T) {
 		exe := setup(t)
 		bin := fakeBinary("v3.0.5")
-		if err := installBinary(exe, bin, digest(bin), "v3.1.0", ""); err == nil {
+		if err := installBinary(exe, bin, digest(bin), "v3.1.0"); err == nil {
 			t.Fatal("binary reporting the wrong version accepted")
 		}
 		if got := installedTag(t, exe); got != "v3.0.0" {
@@ -212,15 +213,53 @@ func TestInstallBinary(t *testing.T) {
 		}
 	})
 
-	t.Run("unhealthy service rolls back", func(t *testing.T) {
-		serviceHealthy = func(string) bool { return false }
+	t.Run("no running daemon is not an error", func(t *testing.T) {
+		signalDaemon = func(string) (int, error) { return 0, nil }
+		defer func() { signalDaemon = func(string) (int, error) { return 4242, nil } }()
+		daemonHealthy = func(int, string) bool { t.Fatal("health checked without a daemon"); return false }
 		exe := setup(t)
 		bin := fakeBinary("v3.1.0")
-		if err := installBinary(exe, bin, digest(bin), "v3.1.0", ""); err == nil {
+		if err := installBinary(exe, bin, digest(bin), "v3.1.0"); err != nil {
+			t.Fatal(err)
+		}
+		if got := installedTag(t, exe); got != "v3.1.0" {
+			t.Fatalf("installed %q", got)
+		}
+	})
+
+	t.Run("unhealthy daemon rolls back", func(t *testing.T) {
+		daemonHealthy = func(int, string) bool { return false }
+		exe := setup(t)
+		bin := fakeBinary("v3.1.0")
+		if err := installBinary(exe, bin, digest(bin), "v3.1.0"); err == nil {
 			t.Fatal("failed restart not reported")
 		}
 		if got := installedTag(t, exe); got != "v3.0.0" {
 			t.Fatalf("not rolled back, running %q", got)
 		}
 	})
+}
+
+func TestSignalRunningDaemonIgnoresStalePID(t *testing.T) {
+	original := allowedConfDir
+	allowedConfDir = t.TempDir()
+	defer func() { allowedConfDir = original }()
+
+	exe := filepath.Join(t.TempDir(), "etr-linux")
+	if pid, err := signalRunningDaemon(exe); pid != 0 || err != nil {
+		t.Fatalf("no pid file: got (%d, %v), want (0, nil)", pid, err)
+	}
+	// Our own pid runs the test binary, not exe, so it must not be signalled.
+	if err := os.WriteFile(pidFile(), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if pid, err := signalRunningDaemon(exe); pid != 0 || err != nil {
+		t.Fatalf("stale pid: got (%d, %v), want (0, nil)", pid, err)
+	}
+	if err := os.WriteFile(pidFile(), []byte("garbage"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := signalRunningDaemon(exe); err == nil {
+		t.Fatal("invalid pid file accepted")
+	}
 }

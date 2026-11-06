@@ -1,0 +1,42 @@
+## <summary>Emerging Threats Rule Generator: nginx blocklist daemon, self-updater and installer.</summary>
+
+########################################
+## <summary>
+##	Rules shared by the daemon and the updater, which both fetch over
+##	HTTPS and read the binary directory.
+## </summary>
+## <param name="domain">
+##	<summary>
+##	Domain allowed access.
+##	</summary>
+## </param>
+#
+template(`etr_network_client',`
+	allow $1 self:process { signal sigchld };
+	allow $1 self:fifo_file rw_fifo_file_perms;
+	allow $1 self:unix_stream_socket create_stream_socket_perms;
+	allow $1 self:unix_dgram_socket create_socket_perms;
+	allow $1 self:tcp_socket create_stream_socket_perms;
+	allow $1 self:udp_socket create_socket_perms;
+	allow $1 self:netlink_route_socket r_netlink_socket_perms;
+
+	corenet_tcp_connect_http_port($1)
+	corenet_tcp_connect_http_cache_port($1)
+	corenet_tcp_connect_squid_port($1)
+	sysnet_dns_name_resolve($1)
+
+	kernel_read_system_state($1)
+	kernel_read_kernel_sysctls($1)
+	dev_read_sysfs($1)
+	# The Go runtime sizes GOMAXPROCS from the cgroup CPU limit.
+	fs_search_cgroup_dirs($1)
+	fs_read_cgroup_files($1)
+	dev_read_urand($1)
+	files_read_etc_files($1)
+	miscfiles_read_localization($1)
+	miscfiles_read_generic_certs($1)
+	logging_send_syslog_msg($1)
+
+	list_dirs_pattern($1, etr_exec_t, etr_exec_t)
+	files_search_var_lib($1)
+')

@@ -1,186 +1,128 @@
 # Native Install (no Docker)
 
-The native build runs ETR directly on an nginx host as a systemd service. It is
-one static binary with no runtime dependencies. It runs updates on its own
-schedule (default 03:00 local, up to 60 min jitter), validates every new
-blocklist with `nginx -t`, and applies it with `systemctl reload-or-restart`:
-a graceful reload that drops no connections where the nginx unit supports one,
-and a restart otherwise (ServerPilot's `nginx-sp`). If validation or reload
-fails, it restores the previous blocklist.
+The native build runs ETR directly on an nginx host under systemd. It is split
+so that nothing which touches the network, or updates itself, runs as root:
 
-| Platform | nginx | Unit file |
+| Part | Runs as | Can write | Job |
+|---|---|---|---|
+| `etr.service` (`/opt/etr/bin/etr-linux`) | `etr` | `/var/lib/etr` | Downloads the lists on a schedule (default 03:00 local, up to 60 min jitter) and stages `/var/lib/etr/blocklist.conf` |
+| `etr-apply.path` → `etr-apply.service` (`/usr/local/sbin/etr-apply`) | root | the nginx include file, `/var/lib/etr-apply` | Rejects the staged file unless every line is an `<ip-or-cidr> <label>;` entry in one `geo` block, then installs it, runs `nginx -t`, reloads nginx and restores the previous file on failure |
+| `etr-update.timer` → `etr-update.service` | `etr` | `/opt/etr/bin` | Installs signed `v3.X.Y` releases of the daemon. Never touches `etr-apply` |
+
+So a compromised daemon, or a malicious release, can at most change which IPs
+are blocked: it cannot write nginx configuration, run anything as root, or
+block the whole internet (`etr-apply` refuses prefixes broader than /8 for
+IPv4 and /16 for IPv6).
+
+Each platform's mandatory access control adds a second layer:
+
+| Platform | MAC | Policy |
 |---|---|---|
-| Ubuntu 20.04 / 22.04 / 24.04 with ServerPilot | `nginx-sp` | [`etr-serverpilot.service`](deploy/systemd/etr-serverpilot.service) |
-| Ubuntu 20.04+ with distro or nginx.org nginx | `nginx` | [`etr.service`](deploy/systemd/etr.service) |
-| RHEL 8 / 9 / 10, Rocky, AlmaLinux, Oracle Linux | `nginx` | [`etr.service`](deploy/systemd/etr.service) |
+| RHEL 8 / 9 / 10, Rocky, AlmaLinux, Oracle Linux | SELinux (enforcing by default) | `etr` module: domains `etr_t`, `etr_update_t`, `etr_apply_t` ([`deploy/selinux`](deploy/selinux)) |
+| Ubuntu 20.04 / 22.04 / 24.04 / 26.04, incl. ServerPilot | AppArmor | profiles `etr-daemon`, `etr-update`, `etr-apply` ([`deploy/apparmor`](deploy/apparmor)) |
 
-All commands below run as root (`sudo -i`).
+The policy is what keeps the daemon from replacing its own binary: it and the
+updater run as the same user, but only the updater's domain/profile may write
+`/opt/etr/bin`. `nginx -t` runs in nginx's own domain (`httpd_t`) or a child
+profile, so `etr-apply` never reads TLS keys itself.
 
 ---
 
-## 1. Install the binary (all platforms)
+## 1. Install or upgrade
+
+As root, on a host where nginx is already installed and running:
 
 ```bash
-case "$(uname -m)" in
-  x86_64)  ARCH=amd64 ;;
-  aarch64) ARCH=arm64 ;;
-  *) echo "unsupported arch: $(uname -m)"; exit 1 ;;
-esac
-
 REPO=madebymode/docker-emerging-threats-rule-generator
-# Newest v3 release. Not releases/latest: v2 builds publish to the same
-# repository and can hold the "latest" marker.
-TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=50" \
-  | grep -o '"tag_name": *"v3[^"]*"' | head -n1 | cut -d'"' -f4)
-echo "Installing $TAG"
-curl -fL -o /tmp/etr-linux "https://github.com/$REPO/releases/download/$TAG/etr-linux-$ARCH"
-
-# `install` writes a new file, so on SELinux hosts it gets the bin_t label
-# for /usr/local/bin. Plain `mv` from /tmp keeps user_tmp_t and systemd
-# fails with status=203/EXEC.
-install -m 0755 -o root -g root /tmp/etr-linux /usr/local/bin/etr-linux
-rm /tmp/etr-linux
-command -v restorecon >/dev/null && restorecon -v /usr/local/bin/etr-linux
-
-mkdir -p /etc/etr
-chmod 0750 /etc/etr
+curl -fsSL -o /tmp/etr-install.sh "https://raw.githubusercontent.com/$REPO/master/deploy/install.sh"
+less /tmp/etr-install.sh          # read it: it runs as root
+bash /tmp/etr-install.sh          # or: --tag v3.X.Y, --nginx serverpilot, --no-auto-update
 ```
 
-To pin a version, set `TAG` to a tag from the releases page instead.
+`install.sh`:
 
-## 2. Write `/etc/etr/config.json`
+1. downloads the newest signed `v3.X.Y` release and checks `manifest.json`
+   against `release-signing.pub` (OpenSSL 3; on OpenSSL 1.1, i.e. RHEL 8 and
+   Ubuntu 20.04, it checks SHA-256 only and tells you how to verify provenance
+   with `gh attestation verify`), then every file's SHA-256;
+2. creates the `etr` system user, `/opt/etr/bin` (owned by `etr`),
+   `/usr/local/sbin/etr-apply` (root), `/etc/etr` and `/var/lib/etr`;
+3. writes `/etc/etr/config.json` with the default lists if there is none, and
+   `/etc/etr/apply.env` for your nginx (ServerPilot is detected from
+   `nginx-sp.service`);
+4. installs the SELinux module on RHEL or the AppArmor profiles on Ubuntu. It
+   stops if that platform's MAC is disabled; pass `--no-mac` to install
+   without it;
+5. installs and starts the units. The first update runs immediately.
 
-The keys are the same as in the Docker setup (see the
-[Configuration table](readme.md#configuration-configjson)). Two values differ
-for native installs:
+Rerunning it upgrades in place and keeps `config.json`, `etr.env` and
+`apply.env`.
 
-- `nginx_conf_file_path` must be inside `NGINX_CONF_DIR` (set in the unit
-  file). Any other path is rejected before anything is downloaded.
-- `nginx_container_names` is ignored. Set `nginx_service_name` instead if the
-  unit is not named `nginx`.
+### Upgrading from the root daemon
 
-```json
-{
-  "local_whitelist": [],
-  "remote_whitelists": [],
-  "local_blocklist": [],
-  "remote_blocklists": [
-    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/5.txt",
-    "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt",
-    "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
-  ],
-  "nginx_conf_file_path": "/etc/nginx/conf.d/blocklist.conf"
-}
-```
+Hosts installed before the split run `/usr/local/bin/etr-linux` as root and
+write nginx config directly. `install.sh` migrates them: it stops the old
+daemon and removes its binary, changes `nginx_conf_file_path` to
+`/var/lib/etr/blocklist.conf`, and keeps the old path as the live include in
+`apply.env`, so nginx configuration does not change. Self-update cannot do
+this migration, because the old daemon's update unit runs as root; run
+`install.sh` once by hand on each host.
 
-```bash
-chmod 0640 /etc/etr/config.json
-```
+## 2. Configuration
 
-Optional settings go in `/etc/etr/etr.env`, one `KEY=value` per line:
-`INSTANCE_NAME`, `ETR_AT_HOUR`, `ETR_JITTER_MINUTES`,
-`BLOCKLIST_FAILURE_THRESHOLD`, notifier credentials (see
-[Environment Variables](readme.md#environment-variables)), and
-`HTTPS_PROXY` / `NO_PROXY` if the server reaches the internet through a proxy.
-This file holds secrets, so restrict it:
+`/etc/etr/config.json` (root:etr, 0640) takes the same keys as the Docker
+setup (see the [Configuration table](readme.md#configuration-configjson)),
+except:
 
-```bash
-touch /etc/etr/etr.env && chmod 0600 /etc/etr/etr.env
-```
+- `nginx_conf_file_path` must be `/var/lib/etr/blocklist.conf`: the daemon
+  can write nowhere else.
+- `nginx_container_names` and `nginx_service_name` are ignored; nginx is set
+  in `apply.env`.
 
-ETR only makes outbound HTTPS requests to the list URLs. It opens no ports, so
-no firewall (ufw/firewalld) changes are needed.
+`/etc/etr/apply.env` (root, 0644) tells `etr-apply` where nginx is:
 
----
+| Variable | nginx / nginx.org / RHEL | ServerPilot |
+|---|---|---|
+| `ETR_LIVE_FILE` | `/etc/nginx/conf.d/blocklist.conf` | `/etc/nginx-sp/http.d/etr-blocklist.conf` |
+| `NGINX_BIN` | `nginx` | `nginx-sp` |
+| `NGINX_SERVICE` | `nginx` | `nginx-sp` |
 
-## 3a. Ubuntu with ServerPilot
+`ETR_LIVE_FILE` must be included at `http` level, because nginx allows `geo`
+only there. ServerPilot's `http.d/` is; its `vhosts.d/APP.d/` is included
+inside `server` blocks and is not. `etr-apply` may write only
+`/etc/nginx/conf.d` and `/etc/nginx-sp/http.d` (systemd `ReadWritePaths=`, the
+AppArmor profile and the SELinux label all say so). For another directory,
+add it in a drop-in (`systemctl edit etr-apply.service`) and, on Ubuntu, in
+`/etc/apparmor.d/local/etr-apply`.
 
-ServerPilot runs its own nginx as the `nginx-sp` service, with configuration
-under `/etc/nginx-sp/`. nginx only allows the generated `geo` block at `http`
-level. ServerPilot's `http.d/` directory is included at that level.
-`vhosts.d/APP.d/*.conf` is included **inside** each app's `server` block, so
-the blocklist must not go there.
+Optional daemon settings go in `/etc/etr/etr.env` (root, 0600; systemd reads
+it before dropping privileges): `INSTANCE_NAME`, `ETR_AT_HOUR`,
+`ETR_JITTER_MINUTES`, `BLOCKLIST_FAILURE_THRESHOLD`, `ETR_APPLY_TIMEOUT`
+(seconds to wait for `etr-apply`, default 120), notifier credentials (see
+[Environment Variables](readme.md#environment-variables)), and `HTTPS_PROXY` /
+`NO_PROXY`.
 
-In `/etc/etr/config.json`:
+ETR makes only outbound HTTPS requests (and SMTP, if configured). It opens no
+ports. On RHEL, SELinux allows HTTP/HTTPS, proxy and SMTP ports; for a webhook
+or proxy on another port, run `setsebool -P etr_connect_any on`.
 
-```json
-  "nginx_conf_file_path": "/etc/nginx-sp/http.d/etr-blocklist.conf",
-  "nginx_service_name": "nginx-sp"
-```
+## 3. nginx placement
 
-Install the unit:
-
-```bash
-curl -fL -o /etc/systemd/system/etr.service \
-  "https://raw.githubusercontent.com/$REPO/master/deploy/systemd/etr-serverpilot.service"
-systemctl daemon-reload
-systemctl enable --now etr
-```
-
-The unit is installed as `etr.service` on every platform, so the commands
-below are the same everywhere.
-
-For each app that should be protected, put the enforcement snippet from §4 in
-`/etc/nginx-sp/vhosts.d/APP.d/etr-block.conf` (`APP` is the real app name),
-and put the `http`-level logging file in `/etc/nginx-sp/http.d/00-etr-logging.conf`.
-Then run `nginx-sp -t && service nginx-sp restart`, which is
-[ServerPilot's documented apply command](https://serverpilot.io/docs/guides/nginx/customize/).
-ETR uses `systemctl reload-or-restart nginx-sp`, which restarts nginx-sp the
-same way if its unit has no reload action. Expect a brief interruption at each
-daily update. To confirm placement, run
-`nginx-sp -T | grep -n 'etr-'`: `etr-blocklist.conf` and `00-etr-logging.conf`
-must appear outside any `server {` block.
-
-## 3b. Ubuntu with distro or nginx.org nginx
-
-Both packages include `/etc/nginx/conf.d/*.conf` at `http` level, so the
-default `nginx_conf_file_path` (`/etc/nginx/conf.d/blocklist.conf`) works
-unchanged.
-
-```bash
-curl -fL -o /etc/systemd/system/etr.service \
-  "https://raw.githubusercontent.com/$REPO/master/deploy/systemd/etr.service"
-systemctl daemon-reload
-systemctl enable --now etr
-```
-
-Then put the `http`-level logging file from §4 in
-`/etc/nginx/conf.d/00-etr-logging.conf`, and add the enforcement snippet to each
-`server {}` that should enforce it: files in `/etc/nginx/sites-enabled/`
-(distro package) or `/etc/nginx/conf.d/` (nginx.org package).
-
-## 3c. RHEL 8 / 9 / 10 (and Rocky, Alma, Oracle)
-
-Install nginx if needed. On RHEL 8 and 9 it ships as a module, and newer
-streams are available:
-
-```bash
-dnf module list nginx            # RHEL 8/9: pick a stream, e.g.
-dnf module enable -y nginx:1.24  # (skip on RHEL 10 — not modular)
-dnf install -y nginx
-systemctl enable --now nginx
-```
-
-RHEL's `nginx.conf` includes `/etc/nginx/conf.d/*.conf` at `http` level, so
-the default `nginx_conf_file_path` works. Install the generic unit as in 3b.
-
-Put the `http`-level logging file from §4 in `/etc/nginx/conf.d/00-etr-logging.conf`.
-On RHEL 8 and 9 the stock server block is inside `/etc/nginx/nginx.conf`
-itself. Add the enforcement snippet there or in your own `conf.d/*.conf`
-server files.
-
-**SELinux** (enforcing by default):
-
-- The binary must be labeled `bin_t`. The `install` and `restorecon` steps in
-  §1 do this. Check with `ls -Z /usr/local/bin/etr-linux`.
-- New files in `/etc/nginx/conf.d/` inherit `httpd_config_t`, which nginx can
-  read. If nginx logs `Permission denied` on `blocklist.conf`, run
-  `restorecon -Rv /etc/nginx/conf.d`.
-- To diagnose a denial: `ausearch -m avc -ts recent`.
-
-**FIPS mode:** the binary is a standard Go build and does not use the system
-OpenSSL. If your hosts must use only FIPS-validated crypto, check that with
-whoever owns the compliance requirement before deploying.
+- **Ubuntu (distro or nginx.org nginx) and RHEL:** `/etc/nginx/conf.d/*.conf`
+  is included at `http` level, so the default `ETR_LIVE_FILE` works. Add the
+  enforcement snippet from §4 to each `server {}` that should block: files in
+  `/etc/nginx/sites-enabled/` (Ubuntu distro package), `/etc/nginx/conf.d/`
+  (nginx.org), or `/etc/nginx/nginx.conf` itself (RHEL 8/9 stock server).
+  On RHEL 8/9 nginx is a module stream: `dnf module enable -y nginx:1.24 &&
+  dnf install -y nginx` (RHEL 10 is not modular).
+- **ServerPilot:** put the enforcement snippet in
+  `/etc/nginx-sp/vhosts.d/APP.d/etr-block.conf` for each app, and the logging
+  file in `/etc/nginx-sp/http.d/00-etr-logging.conf`. Then run
+  `nginx-sp -t && service nginx-sp restart`
+  ([ServerPilot's documented apply command](https://serverpilot.io/docs/guides/nginx/customize/)).
+  nginx-sp has no reload action, so each blocklist change restarts it
+  briefly. Check placement with `nginx-sp -T | grep -n 'etr-'`: both ETR files
+  must appear outside any `server {` block.
 
 ---
 
@@ -249,26 +191,30 @@ sender installer yet.
 ## 5. Verify
 
 ```bash
-systemctl status etr
-journalctl -u etr -f
+systemctl status etr etr-apply.path
+journalctl -u etr -u etr-apply -f
 ```
 
-Because no blocklist exists yet, the first start runs an update right away.
-Expect one `GET` line per list, then a summary:
+The first start builds the blocklist right away:
 
 ```
-GET https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt -> 200 OK, 30199 bytes in 113ms
-Blocklist source https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt: 1786 entries
-Collected 0 unique whitelist and 12143 unique blocklist entries (3/3 remote blocklists fetched)
-Wrote 12143 entries to /etc/nginx/conf.d/blocklist.conf: ...
-systemctl reload-or-restart nginx: OK
-Next scheduled update at 2026-11-07 03:41:12 EST (in 16h12m)
+etr[...]:       Wrote 12143 entries to /var/lib/etr/blocklist.conf: ...
+etr-apply[...]: installed 12143 entries into /etc/nginx/conf.d/blocklist.conf and reloaded nginx
+etr[...]:       etr-apply installed the blocklist (sha256 58942532aee8)
+etr[...]:       Next scheduled update at 2026-11-07 03:41:12 EST (in 16h12m)
 ```
 
-To force an update now, run `systemctl restart etr`. This uses the unit's
-environment. Running `etr-linux --force` from a shell does not read the unit
-file, so you must pass the same variables yourself, e.g.
-`NGINX_CONF_DIR=/etc/nginx-sp/http.d etr-linux --force` on ServerPilot.
+Run an update now with `systemctl restart etr`. For a one-off run from a
+shell, run it as `etr`, never as root (the binary directory is writable by
+`etr`, and the daemon refuses to start as root):
+`sudo -u etr /opt/etr/bin/etr-linux --force`.
+
+To confirm confinement:
+
+```bash
+ps -eo user,label,args | grep etr-linux   # RHEL: etr  system_u:system_r:etr_t:s0
+cat /proc/$(systemctl show -p MainPID --value etr)/attr/current   # Ubuntu: etr-daemon (enforce)
+```
 
 ### Behind a load balancer or CDN
 
@@ -287,84 +233,80 @@ matters.
 
 ---
 
-## 6. Automatic updates (recommended)
+## 6. Automatic updates
 
-`etr-update.timer` checks once a day, at a random time per host. It installs
-the newest signed `v3.MINOR.PATCH` release and nothing else: timestamped
-`master` builds and v2 releases are ignored.
-
-```bash
-for unit in etr-update.service etr-update.timer; do
-  curl -fL -o /etc/systemd/system/$unit \
-    "https://raw.githubusercontent.com/$REPO/master/deploy/systemd/$unit"
-done
-systemctl daemon-reload
-systemctl enable --now etr-update.timer
-```
-
-Each update:
+`install.sh` enables `etr-update.timer` unless you pass `--no-auto-update`.
+It checks once a day at a random time per host and installs the newest signed
+`v3.MINOR.PATCH` release; timestamped `master` builds and v2 releases are
+ignored. Each update:
 
 1. checks the release manifest's Ed25519 signature against the keys compiled
    into the running binary, and refuses unsigned or re-signed releases;
 2. never installs an older version than the one running;
 3. waits until the release is `ETR_UPDATE_DELAY_HOURS` old (default 72), so a
    bad release can be pulled before hosts install it;
-4. checks the binary's SHA-256 against the signed manifest, and checks that it
-   runs and reports the expected version;
-5. swaps the binary in atomically, keeps the old one as
-   `/usr/local/bin/etr-linux.prev`, restarts `etr`, and rolls back if it does
-   not stay up.
+4. checks the binary's SHA-256 against the signed manifest, and that it runs
+   and reports the expected version;
+5. swaps it in atomically (the old one stays as
+   `/opt/etr/bin/etr-linux.prev`) and sends the daemon SIGHUP. The daemon
+   re-executes the new binary in place, keeping its PID. If it does not come
+   back up on the new binary, the update rolls back.
 
-Settings, in `/etc/etr/etr.env`:
+The updater runs as `etr`, so it cannot restart units and never replaces
+`etr-apply`. Updates to `etr-apply`, the units or the policies arrive by
+rerunning `install.sh`; release notes say when that is needed.
 
-| Variable | Default | Effect |
+| Variable (`etr.env`) | Default | Effect |
 |---|---|---|
 | `ETR_AUTO_UPDATE` | `true` | `false` turns updates off |
 | `ETR_UPDATE_PIN` | — | Install exactly this tag (e.g. `v3.2.0`), including a downgrade. Skips the waiting period. |
 | `ETR_UPDATE_DELAY_HOURS` | `72` | Minimum release age before install (0–720) |
-| `ETR_SERVICE` | `etr` | Unit to restart; `none` to skip the restart |
 
-The daemon itself still has no write access to `/usr/local/bin`; only the
-short-lived update unit does. Check with `journalctl -u etr-update`, or run an
-update now with `systemctl start etr-update`.
-
-Binaries from before self-update was added don't have the `--self-update` flag.
-Install a signed `v3.x.y` release by hand once (below); updates are automatic
-from then on.
-
-## Manual upgrade
-
-```bash
-# Set REPO, ARCH and TAG as in §1, then:
-curl -fL -o /tmp/etr-linux "https://github.com/$REPO/releases/download/$TAG/etr-linux-$ARCH"
-install -m 0755 -o root -g root /tmp/etr-linux /usr/local/bin/etr-linux && rm /tmp/etr-linux
-command -v restorecon >/dev/null && restorecon -v /usr/local/bin/etr-linux
-systemctl restart etr
-```
+Check with `journalctl -u etr-update`, or update now with
+`systemctl start etr-update`.
 
 ## Uninstall
 
 ```bash
-systemctl disable --now etr etr-update.timer
-rm /etc/systemd/system/etr.service /etc/systemd/system/etr-update.{service,timer} \
-   /usr/local/bin/etr-linux /usr/local/bin/etr-linux.prev
+systemctl disable --now etr etr-apply.path etr-update.timer
+rm /etc/systemd/system/etr{,-update,-apply}.service /etc/systemd/system/etr-update.timer \
+   /etc/systemd/system/etr-apply.path /usr/local/sbin/etr-apply
+rm -r /opt/etr /var/lib/etr /var/lib/etr-apply
 systemctl daemon-reload
+semodule -r etr 2>/dev/null                        # RHEL
+for p in etr-daemon etr-update etr-apply; do       # Ubuntu
+  apparmor_parser -R /etc/apparmor.d/$p 2>/dev/null; rm -f /etc/apparmor.d/$p
+done
+userdel etr
 ```
 
-Remove the enforcement snippets and `00-etr-logging.conf` before removing
-`blocklist.conf`, otherwise nginx fails with `unknown "blocked_source" variable`.
+Remove the enforcement snippets and `00-etr-logging.conf` before removing the
+live include, otherwise nginx fails with `unknown "blocked_source" variable`.
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
-| `status=203/EXEC` | SELinux label on the binary. Run `restorecon -v /usr/local/bin/etr-linux`. |
-| `status=226/NAMESPACE` | A path in the unit's `ReadWritePaths=` doesn't exist. Create `/etc/etr`, or check you installed the right unit for your nginx. |
-| `nginx_conf_file_path ... is outside allowed directory` | The path in `config.json` must be inside the unit's `NGINX_CONF_DIR`. |
-| `"geo" directive is not allowed here` | The blocklist file is included inside a `server` block. Move it to an `http`-level include (§3a for ServerPilot: `http.d/`). |
-| `nginx binary "nginx" not found` | Set `nginx_service_name` (e.g. `nginx-sp`) or `NGINX_BIN` in `etr.env`. |
-| `0/N remote blocklists fetched` or download timeouts | Outbound HTTPS is blocked. Set `HTTPS_PROXY` in `etr.env` or allow egress to the list hosts. |
+| `etr-apply did not report on the new blocklist within 2m0s` | `etr-apply.path` is not running (`systemctl enable --now etr-apply.path`), or `etr-apply` failed before writing a result: `journalctl -u etr-apply`. |
+| `etr-apply rejected the blocklist: line N: unexpected content` | The staged file is not plain generator output. The live include was not touched. If you did not edit `/var/lib/etr/blocklist.conf` by hand, treat it as a compromise of the daemon. |
+| `prefix /N is broader than /8` (or `/16`) | A list contains a huge range. Remove it from the list, or put it in `local_whitelist`. |
+| `nginx -t rejected the blocklist` / `"geo" directive is not allowed here` | `ETR_LIVE_FILE` is included inside a `server` block. Use an `http`-level include (§2). |
+| `nginx_conf_file_path ... is outside allowed directory "/var/lib/etr"` | A `config.json` from before the split. Set it to `/var/lib/etr/blocklist.conf`, or rerun `install.sh`. |
+| `refusing to run as root` | Run the binary as `etr` (`sudo -u etr ...`) or through `systemctl`. |
+| `status=203/EXEC` on RHEL | Labels. `restorecon -RFv /opt/etr /usr/local/sbin/etr-apply`. |
+| SELinux denial (`ausearch -m avc -ts recent`) or AppArmor denial (`journalctl -k \| grep DENIED`) | Report it with the log line. A local workaround for AppArmor goes in `/etc/apparmor.d/local/<profile>`. |
+| `0/N remote blocklists fetched` | Outbound HTTPS is blocked. Set `HTTPS_PROXY` in `etr.env`; on RHEL with a proxy on an unusual port, `setsebool -P etr_connect_any on`. |
 | `Warning: ignoring unknown config key` | A key in `config.json` is misspelled, so that setting is not applied. |
-| `no release signing keys are compiled into this binary` | This build predates the signing key. Install a signed `v3.x.y` release by hand once. |
-| `manifest signature does not match any trusted release key` | The release was not signed by a trusted key. Do not install it manually; report it. |
-| `flag provided but not defined: -self-update` | The binary predates self-update. Install a signed release by hand once. |
+| `manifest signature does not match` | The release was not signed by a trusted key. Do not install it; report it. |
+
+**FIPS mode:** the binaries are standard Go builds and do not use the system
+OpenSSL. If hosts must use only FIPS-validated crypto, check with whoever owns
+that requirement before deploying.
+
+## Testing a change
+
+`scripts/check-policies.sh` builds and checks the policies in containers.
+`scripts/vm-check.sh` installs everything on a disposable host and runs the
+end-to-end checks (first update, hostile staged file, symlink, re-exec,
+privileges, and zero SELinux/AppArmor denials). Run it on a RHEL VM and an
+Ubuntu VM separately: each enforces only its own MAC.

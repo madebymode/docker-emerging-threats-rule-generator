@@ -14,6 +14,13 @@ releases**. Pushing such a tag runs the `sign-release` job, which:
 4. creates a draft release, attaches the binaries, manifest and signature,
    then publishes it.
 
+The manifest covers the daemon (`etr-linux-*`), the root installer
+(`etr-apply-linux-*`) and `etr-deploy.tar.gz` (units, AppArmor profiles,
+SELinux modules for EL8/9/10 built by the `policies` job, and `install.sh`).
+Self-update replaces only the daemon. If a release changes `etr-apply`, a
+unit or a policy, say so in the release notes: hosts pick those up only when
+someone reruns `install.sh`.
+
 Hosts install a release once it is older than `ETR_UPDATE_DELAY_HOURS`
 (default 72), counted from the signed manifest time. If a release is bad,
 delete it inside that window and no host will have installed it.
