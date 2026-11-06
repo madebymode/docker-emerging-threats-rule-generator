@@ -5,6 +5,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+
+	// The image is FROM scratch with no /usr/share/zoneinfo; embed the zone
+	// database so TZ=<zone> overrides resolve without OS packages.
+	_ "time/tzdata"
 
 	"github.com/moby/moby/client"
 )
@@ -12,6 +17,29 @@ import (
 var allowedConfDir = "/app/nginx/conf"
 
 const defaultConfigPath = "/app/config.json"
+
+// preflight refuses to start in a misconfigured container. The image has no
+// shell, so these checks live here rather than in an entrypoint script.
+func preflight() error {
+	logf("Starting as uid %d (gid %d)\n", os.Geteuid(), os.Getegid())
+	return checkRuntime(os.Geteuid(), allowedConfDir)
+}
+
+func checkRuntime(euid int, confDir string) error {
+	if euid == 0 {
+		return fmt.Errorf("container is running as root. This image is designed to run as uid 1000 (etr-updater). " +
+			"Remove any 'user: root' override or --user=0 flag")
+	}
+	f, err := os.CreateTemp(confDir, ".etr-write-check-*")
+	if err != nil {
+		return fmt.Errorf("%s is not writable by uid %d. "+
+			"Named volumes inherit ownership from the image on first run — check that the volume is fresh. "+
+			"For bind mounts, run: sudo chown -R 1000:987 <host-path>", confDir, euid)
+	}
+	f.Close()
+	os.Remove(f.Name())
+	return nil
+}
 
 // testNginxConfig is a no-op for the Docker variant. The nginx binary lives
 // inside a separate container, so we can't shell out to `nginx -t` locally.

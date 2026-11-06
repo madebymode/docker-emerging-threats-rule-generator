@@ -3,11 +3,29 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/moby/moby/client"
 )
+
+func TestCheckRuntime(t *testing.T) {
+	dir := t.TempDir()
+	if err := checkRuntime(1000, dir); err != nil {
+		t.Fatalf("writable dir rejected: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("write check left files behind: %v", entries)
+	}
+	if err := checkRuntime(0, dir); err == nil || !strings.Contains(err.Error(), "running as root") {
+		t.Fatalf("root not rejected: %v", err)
+	}
+	if err := checkRuntime(1000, filepath.Join(dir, "missing")); err == nil || !strings.Contains(err.Error(), "not writable") {
+		t.Fatalf("unwritable dir not rejected: %v", err)
+	}
+}
 
 func TestRestartUsesDockerAPI(t *testing.T) {
 	var restarted []string

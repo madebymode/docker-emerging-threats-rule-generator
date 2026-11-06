@@ -20,6 +20,11 @@ func main() {
 	force := flag.Bool("force", false, "Run one update immediately and exit, regardless of ETR_DAEMON")
 	flag.Parse()
 
+	if err := preflight(); err != nil {
+		logf("ERROR: %v\n", err)
+		os.Exit(1)
+	}
+
 	config, err := readConfig(defaultConfigPath)
 	if err != nil {
 		logf("Failed to read config file: %v\n", err)
@@ -135,7 +140,9 @@ func runUpdate(config *Config, notifiers []Notifier, subjectPrefix string) error
 			logf("Failed to download file from %s: %v\n", url, err)
 			continue
 		}
-		for address := range parseIPAddresses(content) {
+		addresses := parseIPAddresses(content)
+		logf("Whitelist source %s: %d entries\n", redactURL(url), len(addresses))
+		for address := range addresses {
 			whitelist[address] = url
 		}
 	}
@@ -153,10 +160,15 @@ func runUpdate(config *Config, notifiers []Notifier, subjectPrefix string) error
 			remoteBlocklistFailures++
 			continue
 		}
-		for address := range parseIPAddresses(content) {
+		addresses := parseIPAddresses(content)
+		logf("Blocklist source %s: %d entries\n", redactURL(url), len(addresses))
+		for address := range addresses {
 			blocklist[address] = append(blocklist[address], url)
 		}
 	}
+	logf("Collected %d unique whitelist and %d unique blocklist entries (%d/%d remote blocklists fetched)\n",
+		len(whitelist), len(blocklist),
+		len(config.RemoteBlocklists)-remoteBlocklistFailures, len(config.RemoteBlocklists))
 
 	if len(config.RemoteBlocklists) > 0 {
 		failurePct := remoteBlocklistFailures * 100 / len(config.RemoteBlocklists)

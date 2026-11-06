@@ -148,3 +148,28 @@ func TestLabelsCannotInjectNginxDirectives(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactURL(t *testing.T) {
+	cases := map[string]string{
+		"https://example.com/list.txt":                   "https://example.com/list.txt",
+		"https://example.com/feed?key=secret&format=txt": "https://example.com/feed?REDACTED",
+		"https://user:pass@example.com/list#frag":        "https://REDACTED@example.com/list",
+		"://bad": "<unparseable URL>",
+	}
+	for in, want := range cases {
+		if got := redactURL(in); got != want {
+			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestIsSingleHost(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"1.2.3.4": true, "1.2.3.4/32": true, "2001:db8::1": true, "2001:db8::1/128": true,
+		"1.2.3.0/24": false, "2001:db8::/32": false, "garbage": false,
+	} {
+		if got := isSingleHost(addr); got != want {
+			t.Errorf("isSingleHost(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}

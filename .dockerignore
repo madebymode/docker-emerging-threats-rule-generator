@@ -5,5 +5,4 @@
 !go.mod
 !go.sum
 !*.go
-!docker-entrypoint.sh
 !docker-cronjob

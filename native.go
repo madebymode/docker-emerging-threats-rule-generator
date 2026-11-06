@@ -20,6 +20,11 @@ func init() {
 	}
 }
 
+// preflight is a no-op natively; the systemd unit owns user and path setup.
+func preflight() error {
+	return nil
+}
+
 // nginxService resolves the systemd unit name.
 // Precedence: NGINX_SERVICE env > config nginx_service_name > "nginx".
 func nginxService(config *Config) string {

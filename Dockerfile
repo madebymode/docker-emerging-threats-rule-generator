@@ -12,20 +12,25 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/nginx_blacklist
 
-FROM alpine:3.24
+# Assemble the runtime filesystem here; the final stage has no shell or apk.
+RUN apk add --no-cache tzdata \
+    && mkdir -p /rootfs/etc/ssl/certs /app-skel/nginx/conf \
+    && cp /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/ \
+    && cp /usr/share/zoneinfo/America/New_York /rootfs/etc/localtime \
+    && echo "America/New_York" > /rootfs/etc/timezone \
+    && echo "etr-updater:x:1000:987::/app:/sbin/nologin" > /rootfs/etc/passwd \
+    && echo "etr-updater:x:987:" > /rootfs/etc/group \
+    && chown -R 1000:987 /app-skel
 
-RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S -g 987 etr-updater \
-    && adduser -S -D -H -u 1000 -G etr-updater etr-updater \
-    && mkdir -p /app/nginx/conf \
-    && ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime \
-    && echo "America/New_York" > /etc/timezone \
-    && chown -R etr-updater:etr-updater /app
+# No OS packages at runtime: nothing for base-image CVE scanners to flag.
+FROM scratch
 
+COPY --from=build /rootfs/ /
+# COPY resets ownership to root unless --chown is given.
+COPY --from=build --chown=1000:987 /app-skel/ /app/
 COPY --from=build /out/nginx_blacklist /usr/local/bin/nginx_blacklist
-COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-USER etr-updater
+USER 1000:987
 WORKDIR /app
 
 # Daemon mode: the binary self-schedules its own runs (default 03:00 local
@@ -33,5 +38,4 @@ WORKDIR /app
 # it directly for clean shutdown.
 ENV ETR_DAEMON=true
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/usr/local/bin/nginx_blacklist"]

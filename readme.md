@@ -84,7 +84,7 @@ Copy `config.example.json` from the repo or create it from scratch. At minimum, 
 ```json
 {
   "nginx_container_names": ["nginx-blacklist"],
-  "block_lists": [
+  "remote_blocklists": [
     "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/6.txt",
     "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/5.txt",
     "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/4.txt",
@@ -167,10 +167,10 @@ See [testing.md](testing.md) for how to spoof specific IPs against the live bloc
 | Field | Description |
 |---|---|
 | `nginx_container_names` | Container names to restart after updating. Must match Docker's runtime name (the service name from compose). |
-| `block_lists` | URLs to fetch for blocking. One IP or CIDR per line; `#` comments are ignored. Each URL becomes a source label in logs (e.g. `ipsum-6`, `compromised-ips`). |
+| `remote_blocklists` | URLs to fetch for blocking. One IP or CIDR per line; `#` comments are ignored. Each URL becomes a source label in logs (e.g. `ipsum-6`, `compromised-ips`). |
 | `local_blocklist` | Static IPs/CIDRs to always block, defined inline in the config. |
 | `local_whitelist` | Static IPs/CIDRs to never block, defined inline in the config. Takes precedence over all blocklists. |
-| `remote_whitelists` | URLs to fetch for whitelisting. Same format as `block_lists`. |
+| `remote_whitelists` | URLs to fetch for whitelisting. Same format as `remote_blocklists`. |
 | `nginx_conf_file_path` | Where to write `blocklist.conf` inside the container. Must match the shared volume mount. |
 
 Full default config for reference:
@@ -180,7 +180,7 @@ Full default config for reference:
   "nginx_container_names": [
     "nginx-blacklist-1"
   ],
-  "block_lists": [
+  "remote_blocklists": [
     "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/8.txt",
     "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/7.txt",
     "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/6.txt",
@@ -240,7 +240,7 @@ Skipping whitelisted IP: 1.2.3.4 (matched: 1.2.3.0/24 from local_whitelist) - fo
 ```json
 {
   "nginx_container_names": ["nginx-blacklist"],
-  "block_lists": [
+  "remote_blocklists": [
     "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
   ],
   "local_whitelist": [

@@ -142,6 +142,7 @@ func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]stri
 		label string
 	}
 	var entries []addrEntry
+	skipped, split := 0, 0
 
 	for address, blocklistSources := range blocklist {
 		// Derive the nginx label: join all source labels with "+"
@@ -195,6 +196,7 @@ func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]stri
 
 		if len(remaining) == 0 {
 			// Entirely whitelisted
+			skipped++
 			if whitelisted, matchedEntry, whitelistSource := isIPWhitelisted(address, whitelist); whitelisted {
 				logf("Skipping whitelisted IP: %s (matched: %s from %s) - found in blocklist: %s\n",
 					address, matchedEntry, whitelistSource, blocklistLabel)
@@ -206,6 +208,7 @@ func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]stri
 			entries = append(entries, addrEntry{addr: address, label: blocklistLabel})
 		} else {
 			// Partial overlap: emit carved subnets, omitting whitelisted portions
+			split++
 			logf("Splitting blocklist CIDR %s (from %s): retaining %d sub-ranges after whitelist exclusions\n",
 				address, blocklistLabel, len(remaining))
 			for _, subnet := range remaining {
@@ -248,5 +251,25 @@ func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]stri
 		return fmt.Errorf("failed to atomically replace blocklist file: %v", err)
 	}
 
+	ips, ranges := 0, 0
+	for _, e := range entries {
+		if isSingleHost(e.addr) {
+			ips++
+		} else {
+			ranges++
+		}
+	}
+	logf("Wrote %d entries to %s: %d single IPs, %d CIDR ranges (%d fully whitelisted, %d split around whitelist)\n",
+		len(entries), filePath, ips, ranges, skipped, split)
 	return nil
+}
+
+// isSingleHost reports whether addr is a bare IP or a /32 or /128 prefix.
+func isSingleHost(addr string) bool {
+	ip, ipNet, err := net.ParseCIDR(addr)
+	if err != nil {
+		return net.ParseIP(addr) != nil
+	}
+	ones, bits := ipNet.Mask.Size()
+	return ones == bits && ip != nil
 }
