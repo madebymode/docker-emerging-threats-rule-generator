@@ -1,0 +1,28 @@
+[Unit]
+Description=Emerging Threats Rule Generator self-update
+Documentation=https://github.com/madebymode/docker-emerging-threats-rule-generator/blob/master/native-install.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Installs the newest signed v3.x.y release (Ed25519-verified, never older than
+# the running version), then restarts etr.service and rolls back if it fails.
+# Settings: ETR_AUTO_UPDATE, ETR_UPDATE_PIN, ETR_UPDATE_DELAY_HOURS in etr.env.
+ExecStart=/usr/local/bin/etr-linux --self-update
+EnvironmentFile=-/etc/etr/etr.env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=etr-update
+
+# Hardening. Separate from etr.service so the long-running daemon never has
+# write access to its own binary; only this short-lived unit does.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/usr/local/bin
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes

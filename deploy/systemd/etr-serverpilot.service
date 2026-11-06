@@ -1,6 +1,6 @@
 [Unit]
 Description=Emerging Threats Rule Generator (ServerPilot, self-scheduling daemon)
-Documentation=https://github.com/mxmd/etr
+Documentation=https://github.com/madebymode/docker-emerging-threats-rule-generator/blob/master/native-install.md
 After=network-online.target nginx-sp.service
 Wants=network-online.target
 
@@ -16,8 +16,10 @@ Environment=ETR_DAEMON=true
 
 # ServerPilot-specific paths and service name.
 # Set nginx_conf_file_path in /etc/etr/config.json to:
-#   /etc/nginx-sp/vhosts.d/APPNAME.d/blocklist.conf
-Environment=NGINX_CONF_DIR=/etc/nginx-sp/vhosts.d
+#   /etc/nginx-sp/http.d/etr-blocklist.conf
+# http.d is ServerPilot's http-level include directory. Not vhosts.d/APPNAME.d/:
+# that is included inside a server block, where nginx rejects the geo block.
+Environment=NGINX_CONF_DIR=/etc/nginx-sp/http.d
 Environment=NGINX_SERVICE=nginx-sp
 
 EnvironmentFile=-/etc/etr/etr.env
@@ -31,7 +33,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=full
-ReadWritePaths=/etc/nginx-sp/vhosts.d /etc/etr
+ReadWritePaths=/etc/nginx-sp/http.d /etc/etr
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=yes
 MemoryDenyWriteExecute=yes

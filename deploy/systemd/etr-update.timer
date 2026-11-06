@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily check for signed ETR releases
+
+[Timer]
+OnCalendar=daily
+# Spread hosts across the day so a bad release never reaches every host at once.
+RandomizedDelaySec=12h
+# systemd 247+ keeps each host's offset stable; older systemd (RHEL 8: 239,
+# Ubuntu 20.04: 245) ignores this line with a warning and re-randomizes daily.
+FixedRandomDelay=yes
+Persistent=true
+
+[Install]
+WantedBy=timers.target

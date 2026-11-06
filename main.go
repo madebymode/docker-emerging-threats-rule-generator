@@ -16,9 +16,26 @@ func logf(format string, args ...interface{}) {
 	fmt.Printf("["+time.Now().Format("2006/01/02 15:04:05")+"] "+format, args...)
 }
 
+// version is the release tag, set at build time with -ldflags "-X main.version=v3.1.0".
+var version = "dev"
+
 func main() {
 	force := flag.Bool("force", false, "Run one update immediately and exit, regardless of ETR_DAEMON")
+	showVersion := flag.Bool("version", false, "Print the version and exit")
+	update := flag.Bool("self-update", false, "Install the newest signed v3 release and exit (native build only)")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
+	if *update {
+		if err := selfUpdate(); err != nil {
+			logf("Self-update failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := preflight(); err != nil {
 		logf("ERROR: %v\n", err)

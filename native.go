@@ -61,14 +61,15 @@ func testNginxConfig(config *Config) error {
 	return nil
 }
 
-// reloadNginx sends SIGHUP via systemd for a graceful reload — existing
-// connections are drained, new workers pick up the new config. No dropped requests.
+// reloadNginx applies the new config through systemd. reload-or-restart sends
+// a graceful reload (SIGHUP, no dropped requests) when the unit defines one,
+// and restarts otherwise: ServerPilot documents only a restart for nginx-sp.
 func reloadNginx(config *Config) error {
 	svc := nginxService(config)
-	out, err := exec.Command("systemctl", "reload", svc).CombinedOutput()
+	out, err := exec.Command("systemctl", "reload-or-restart", svc).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("systemctl reload %s failed: %v\n%s", svc, err, out)
+		return fmt.Errorf("systemctl reload-or-restart %s failed: %v\n%s", svc, err, out)
 	}
-	logf("systemctl reload %s: OK\n", svc)
+	logf("systemctl reload-or-restart %s: OK\n", svc)
 	return nil
 }

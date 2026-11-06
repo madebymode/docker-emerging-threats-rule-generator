@@ -1,6 +1,6 @@
 [Unit]
 Description=Emerging Threats Rule Generator (self-scheduling daemon)
-Documentation=https://github.com/mxmd/etr
+Documentation=https://github.com/madebymode/docker-emerging-threats-rule-generator/blob/master/native-install.md
 After=network-online.target nginx.service
 Wants=network-online.target
 
