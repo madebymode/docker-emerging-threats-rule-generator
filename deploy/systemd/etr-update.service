@@ -7,22 +7,47 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 # Installs the newest signed v3.x.y release (Ed25519-verified, never older than
-# the running version), then restarts etr.service and rolls back if it fails.
+# the running version) over /opt/etr/bin/etr-linux, then sends SIGHUP so the
+# daemon re-executes it, and rolls back if the daemon does not stay up.
 # Settings: ETR_AUTO_UPDATE, ETR_UPDATE_PIN, ETR_UPDATE_DELAY_HOURS in etr.env.
-ExecStart=/usr/local/bin/etr-linux --self-update
+#
+# Runs as etr, like the daemon: a malicious release could do no more than the
+# daemon can. etr-apply is root and is never updated by this unit.
+User=etr
+Group=etr
+ExecStart=/opt/etr/bin/etr-linux --self-update
 EnvironmentFile=-/etc/etr/etr.env
 
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=etr-update
 
-# Hardening. Separate from etr.service so the long-running daemon never has
-# write access to its own binary; only this short-lived unit does.
+# The updater gets its own SELinux domain and AppArmor profile, which, unlike
+# the daemon's, may write the binary. "-": optional, see etr.service.
+SELinuxContext=-system_u:system_r:etr_update_t:s0
+AppArmorProfile=-etr-update
+
 NoNewPrivileges=yes
-PrivateTmp=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/opt/etr/bin
 ProtectHome=yes
-ProtectSystem=full
-ReadWritePaths=/usr/local/bin
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM

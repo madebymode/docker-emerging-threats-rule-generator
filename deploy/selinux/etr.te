@@ -1,0 +1,137 @@
+policy_module(etr, 1.0.0)
+
+########################################
+#
+# Three domains, one per program:
+#
+#   etr_t         the daemon: downloads lists, writes /var/lib/etr only
+#   etr_update_t  self-update: the only domain that may write /opt/etr/bin
+#   etr_apply_t   etr-apply (root): reads the staged list, writes one nginx
+#                 include, runs nginx -t (as httpd_t) and reloads nginx
+#
+# The daemon and the updater run the same binary as the same user, so file
+# permissions cannot keep a compromised daemon from replacing its own binary.
+# Separate domains can: etr_t has no write access to etr_exec_t.
+#
+
+## <desc>
+## <p>
+## Allow the daemon to connect to any TCP port, for webhooks or proxies on
+## non-standard ports. Off: HTTP/HTTPS, proxy and SMTP ports only.
+## </p>
+## </desc>
+gen_tunable(etr_connect_any, false)
+
+type etr_t;
+type etr_exec_t;
+init_daemon_domain(etr_t, etr_exec_t)
+
+# etr-update.service selects this domain with SELinuxContext=. The placeholder
+# exec type gives it the standard daemon rules; its real entrypoint is
+# etr_exec_t, which already transitions to etr_t by default.
+type etr_update_t;
+type etr_update_exec_t;
+init_daemon_domain(etr_update_t, etr_update_exec_t)
+domain_entry_file(etr_update_t, etr_exec_t)
+
+type etr_apply_t;
+type etr_apply_exec_t;
+init_daemon_domain(etr_apply_t, etr_apply_exec_t)
+
+type etr_conf_t;
+files_config_file(etr_conf_t)
+
+type etr_var_lib_t;
+files_type(etr_var_lib_t)
+
+type etr_apply_var_lib_t;
+files_type(etr_apply_var_lib_t)
+
+########################################
+#
+# etr_t: the daemon
+#
+
+etr_network_client(etr_t)
+corenet_tcp_connect_smtp_port(etr_t)
+
+tunable_policy(`etr_connect_any',`
+	corenet_tcp_connect_all_ports(etr_t)
+')
+
+read_files_pattern(etr_t, etr_conf_t, etr_conf_t)
+list_dirs_pattern(etr_t, etr_conf_t, etr_conf_t)
+
+manage_dirs_pattern(etr_t, etr_var_lib_t, etr_var_lib_t)
+manage_files_pattern(etr_t, etr_var_lib_t, etr_var_lib_t)
+
+read_files_pattern(etr_t, etr_apply_var_lib_t, etr_apply_var_lib_t)
+list_dirs_pattern(etr_t, etr_apply_var_lib_t, etr_apply_var_lib_t)
+
+# Re-exec after self-update. Read and execute only, never write.
+can_exec(etr_t, etr_exec_t)
+
+########################################
+#
+# etr_update_t: self-update
+#
+
+etr_network_client(etr_update_t)
+
+manage_files_pattern(etr_update_t, etr_exec_t, etr_exec_t)
+can_exec(etr_update_t, etr_exec_t)
+
+# Find the daemon through its pid file, check what it runs, send SIGHUP.
+read_files_pattern(etr_update_t, etr_var_lib_t, etr_var_lib_t)
+list_dirs_pattern(etr_update_t, etr_var_lib_t, etr_var_lib_t)
+ps_process_pattern(etr_update_t, etr_t)
+allow etr_update_t etr_t:process signal;
+
+########################################
+#
+# etr_apply_t: the root installer
+#
+
+allow etr_apply_t self:process { signal sigchld };
+allow etr_apply_t self:fifo_file rw_fifo_file_perms;
+allow etr_apply_t self:unix_stream_socket create_stream_socket_perms;
+allow etr_apply_t self:capability { chown dac_read_search fowner };
+dontaudit etr_apply_t self:capability dac_override;
+
+kernel_read_system_state(etr_apply_t)
+dev_read_sysfs(etr_apply_t)
+fs_search_cgroup_dirs(etr_apply_t)
+fs_read_cgroup_files(etr_apply_t)
+files_read_etc_files(etr_apply_t)
+miscfiles_read_localization(etr_apply_t)
+logging_send_syslog_msg(etr_apply_t)
+
+# The staged list, read through a directory handle.
+files_search_var_lib(etr_apply_t)
+read_files_pattern(etr_apply_t, etr_var_lib_t, etr_var_lib_t)
+list_dirs_pattern(etr_apply_t, etr_var_lib_t, etr_var_lib_t)
+dontaudit etr_apply_t etr_var_lib_t:lnk_file read;
+
+manage_files_pattern(etr_apply_t, etr_apply_var_lib_t, etr_apply_var_lib_t)
+manage_dirs_pattern(etr_apply_t, etr_apply_var_lib_t, etr_apply_var_lib_t)
+
+# Writes the live include. httpd_config_t is the label nginx reads its
+# configuration under; files created in /etc/nginx/conf.d inherit it.
+apache_manage_config(etr_apply_t)
+
+# `nginx -t` runs in nginx's own domain, which may read TLS keys and open
+# logs. etr_apply_t gets neither.
+apache_domtrans(etr_apply_t)
+gen_require(`
+	type httpd_t;
+	type httpd_unit_file_t;
+')
+allow httpd_t etr_apply_t:fd use;
+allow httpd_t etr_apply_t:fifo_file rw_fifo_file_perms;
+
+# `systemctl reload-or-restart nginx`.
+systemd_exec_systemctl(etr_apply_t)
+init_stream_connect(etr_apply_t)
+init_read_state(etr_apply_t)
+init_status(etr_apply_t)
+allow etr_apply_t httpd_unit_file_t:service { reload start status stop };

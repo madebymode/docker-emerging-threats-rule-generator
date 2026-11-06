@@ -610,7 +610,7 @@ Alternative configurations for setups that don't use Traefik:
 
 - [reporting.md](reporting.md) — Query and analyze blocked request logs with `jq`
 - [testing.md](testing.md) — Manually test the blocklist and nginx behavior locally
-- [native-install.md](native-install.md) — Install the native binary with systemd on Ubuntu (incl. ServerPilot) and RHEL 8–10, with signed self-updates
+- [native-install.md](native-install.md) — Native install on Ubuntu (incl. ServerPilot) and RHEL 8–10: unprivileged daemon, root `etr-apply` validator, SELinux/AppArmor policies, signed self-updates
 - [releasing.md](releasing.md) — Cut signed `v3.x.y` releases and manage the signing key
 
 ---
