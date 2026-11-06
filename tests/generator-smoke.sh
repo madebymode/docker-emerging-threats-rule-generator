@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+# Busybox is the only tool in this image; resolve applets through it.
+for applet in id grep test cat stat; do
+    eval "$applet() { /bin/busybox $applet \"\$@\"; }"
+done
+
 # Runtime user is etr-updater (uid 1000) — no root anywhere.
 test "$(id -un)" = etr-updater
 test "$(id -u)" = 1000
@@ -11,7 +16,6 @@ grep -q 'NoNewPrivs:[[:space:]]*1' /proc/self/status
 
 # Installed binaries must not be writable by the runtime user.
 test ! -w /usr/local/bin/nginx_blacklist
-test ! -w /usr/local/bin/docker-entrypoint.sh
 
 # The one directory the daemon needs to write.
 test -w /app/nginx/conf
@@ -33,8 +37,5 @@ RESTART_CONTAINERS=false /usr/local/bin/nginx_blacklist --force
 grep -q '1.2.3.0/30' /app/nginx/conf/blocklist.conf
 grep -q '2001:db8::1' /app/nginx/conf/blocklist.conf
 test "$(stat -c %a /app/nginx/conf/blocklist.conf)" = 644
-
-# Entrypoint guards against running as root.
-grep -q 'container is running as root' /usr/local/bin/docker-entrypoint.sh
 
 echo 'Docker hardening smoke tests passed'

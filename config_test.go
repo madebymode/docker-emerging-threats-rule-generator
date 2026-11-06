@@ -511,3 +511,21 @@ func BenchmarkReadConfig(b *testing.B) {
 		}
 	}
 }
+
+func TestUnknownConfigKeys(t *testing.T) {
+	got := unknownConfigKeys([]byte(`{"remote_blocklists": [], "Local_Whitelist": [], "block_lists": [], "zzz": 1}`))
+	if want := []string{"block_lists", "zzz"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unknownConfigKeys = %v, want %v", got, want)
+	}
+}
+
+// The shipped example must only use keys the parser understands.
+func TestExampleConfigKeysAreKnown(t *testing.T) {
+	data, err := os.ReadFile("config.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unknown := unknownConfigKeys(data); len(unknown) != 0 {
+		t.Fatalf("config.example.json has unknown keys: %v", unknown)
+	}
+}

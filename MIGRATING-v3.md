@@ -20,6 +20,10 @@ stricter security behavior explicit for existing deployments.
   reacts to SIGTERM for clean shutdown. `crond` is no longer installed. Use
   `docker exec <container> /usr/local/bin/nginx_blacklist --force` to trigger
   an immediate one-shot update, or run `--force` directly to skip daemon mode.
+- The image is built `FROM scratch`: no shell, busybox, or apk. `docker exec
+  <container> sh` no longer works; exec the binary directly as above. The
+  timezone defaults to America/New_York; set `TZ` (e.g. `TZ=Europe/London`)
+  to override it.
 - Keep the generator's rules volume writable. Mount the rules volume and
   `default.conf` read-only in nginx. Edit nginx configuration on the host instead
   of from inside nginx. Generated rules are readable across different nginx UIDs.

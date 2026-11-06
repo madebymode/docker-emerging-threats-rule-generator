@@ -1,7 +1,9 @@
 ARG ETR_IMAGE=etr:hardening-test
 FROM ${ETR_IMAGE} AS rules
 COPY --chown=etr-updater:etr-updater tests/nginx-fixture.json /app/config.json
-RUN RESTART_CONTAINERS=false /usr/local/bin/nginx_blacklist --force
+# The ETR image has no shell, so RUN must use exec form.
+ENV RESTART_CONTAINERS=false
+RUN ["/usr/local/bin/nginx_blacklist", "--force"]
 
 FROM nginx/nginx-unprivileged:alpine-slim
 COPY --from=rules /app/nginx/conf/blocklist.conf /etc/nginx/conf.d/blocklist.conf

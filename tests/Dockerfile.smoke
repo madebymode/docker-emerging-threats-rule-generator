@@ -1,4 +1,7 @@
 ARG ETR_IMAGE=etr:hardening-test
 FROM ${ETR_IMAGE}
+# The shipped image has no shell. Static busybox is added to this test-only
+# image so the checks below can run inside the real runtime filesystem.
+COPY --from=busybox:1.37.0-musl /bin/busybox /bin/busybox
 COPY tests/generator-smoke.sh /smoke.sh
-ENTRYPOINT ["sh", "/smoke.sh"]
+ENTRYPOINT ["/bin/busybox", "sh", "/smoke.sh"]

@@ -2,7 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"os"
+	"reflect"
+	"sort"
+	"strings"
 )
 
 // Config struct includes local and remote IP lists for whitelisting and blocklisting
@@ -29,12 +33,42 @@ func readConfig(filePath string) (*Config, error) {
 		}
 	}(file)
 
-	decoder := json.NewDecoder(file)
-	config := &Config{}
-	err = decoder.Decode(config)
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return nil, err
 	}
+	config := &Config{}
+	if err := json.Unmarshal(data, config); err != nil {
+		return nil, err
+	}
+
+	// encoding/json silently drops unknown keys, so a misspelled list name
+	// would otherwise disable that list without any sign in the logs.
+	for _, key := range unknownConfigKeys(data) {
+		logf("Warning: ignoring unknown config key %q in %s\n", key, filePath)
+	}
 
 	return config, nil
+}
+
+// unknownConfigKeys returns top-level keys in data that map to no Config field.
+func unknownConfigKeys(data []byte) []string {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	known := make(map[string]bool)
+	t := reflect.TypeOf(Config{})
+	for i := 0; i < t.NumField(); i++ {
+		// encoding/json matches keys case-insensitively; mirror that.
+		known[strings.ToLower(strings.Split(t.Field(i).Tag.Get("json"), ",")[0])] = true
+	}
+	var unknown []string
+	for key := range raw {
+		if !known[strings.ToLower(key)] {
+			unknown = append(unknown, key)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
 }

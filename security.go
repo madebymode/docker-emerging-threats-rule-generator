@@ -146,13 +146,21 @@ func downloadFile(rawURL string) (string, error) {
 		return "", fmt.Errorf("URL validation failed: %v", err)
 	}
 
+	start := time.Now()
 	resp, err := downloadClient.Get(rawURL)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
+	redirect := ""
+	if resp.Request != nil && resp.Request.URL.String() != rawURL {
+		final := resp.Request.URL.String()
+		redirect = " (redirected to " + redactURL(final) + ")"
+	}
+
 	if resp.StatusCode != http.StatusOK {
+		logf("GET %s -> %s%s\n", redactURL(rawURL), resp.Status, redirect)
 		return "", fmt.Errorf("error fetching URL %s: status code %d", rawURL, resp.StatusCode)
 	}
 
@@ -164,5 +172,24 @@ func downloadFile(rawURL string) (string, error) {
 		return "", fmt.Errorf("response exceeds %d bytes", maxResponseSize)
 	}
 
+	logf("GET %s -> %s, %d bytes in %s%s\n", redactURL(rawURL), resp.Status, len(body),
+		time.Since(start).Round(time.Millisecond), redirect)
 	return string(body), nil
+}
+
+// redactURL drops credentials and query strings, which feed providers often
+// use for API keys, so request URLs are safe to write to stdout.
+func redactURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "<unparseable URL>"
+	}
+	if u.User != nil {
+		u.User = url.User("REDACTED")
+	}
+	if u.RawQuery != "" {
+		u.RawQuery = "REDACTED"
+	}
+	u.Fragment = ""
+	return u.String()
 }
