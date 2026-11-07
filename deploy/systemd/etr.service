@@ -23,6 +23,8 @@ Environment=ETR_DAEMON=true
 # Example: INSTANCE_NAME=prod, BLOCKLIST_FAILURE_THRESHOLD=20,
 #          ETR_AT_HOUR=3, ETR_JITTER_MINUTES=60, ETR_RUN_ON_START=false
 EnvironmentFile=-/etc/etr/etr.env
+# Installer-managed mode; kept separate from operator settings.
+EnvironmentFile=-/etc/etr/apply-mode.env
 
 # /var/lib/etr: staged blocklist.conf and etr.pid. Only root and etr read it.
 StateDirectory=etr

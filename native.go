@@ -60,11 +60,44 @@ func init() {
 // preflight refuses to run as root: nothing in the native daemon needs it,
 // and the binary lives in a directory the etr user can write.
 func preflight() error {
+	if err := validateApplyMode(); err != nil {
+		return err
+	}
 	if os.Geteuid() == 0 {
 		return fmt.Errorf("refusing to run as root. Run the daemon as the etr user (systemctl start etr), "+
 			"or a one-off update with: sudo -u etr %s --force", selfPath)
 	}
 	return nil
+}
+
+// applyMode controls only the generator's acknowledgement behavior. It never
+// grants permission to execute a root command or write the live nginx include.
+func applyMode() string {
+	if mode := os.Getenv("ETR_APPLY_MODE"); mode != "" {
+		return mode
+	}
+	return "systemd"
+}
+
+func validateApplyMode() error {
+	switch applyMode() {
+	case "systemd", "cron", "generator":
+		return nil
+	default:
+		return fmt.Errorf("ETR_APPLY_MODE must be systemd, cron or generator")
+	}
+}
+
+func shouldReloadNginx() bool {
+	return applyMode() == "systemd" && os.Getenv("RESTART_CONTAINERS") != "false"
+}
+
+func logBlocklistSuccess(config *Config, reload bool) {
+	if reload {
+		logf("Blocklist applied and nginx reloaded successfully.\n")
+	} else {
+		logf("Blocklist staged at %s; root application is managed externally (ETR_APPLY_MODE=%s).\n", config.ConfFilePath, applyMode())
+	}
 }
 
 // pidFile lets etr-update find the daemon without systemd or D-Bus access.

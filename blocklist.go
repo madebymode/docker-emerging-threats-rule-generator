@@ -199,7 +199,7 @@ func writeBlocklistFile(whitelist map[string]string, blocklist map[string][]stri
 			skipped++
 			if whitelisted, matchedEntry, whitelistSource := isIPWhitelisted(address, whitelist); whitelisted {
 				logf("Skipping whitelisted IP: %s (matched: %s from %s) - found in blocklist: %s\n",
-					address, matchedEntry, whitelistSource, blocklistLabel)
+					address, matchedEntry, redactURL(whitelistSource), blocklistLabel)
 			} else {
 				logf("Skipping whitelisted IP: %s - found in blocklist: %s\n", address, blocklistLabel)
 			}

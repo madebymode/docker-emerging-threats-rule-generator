@@ -162,7 +162,7 @@ func runUpdate(config *Config, notifiers []Notifier, subjectPrefix string) error
 	for _, url := range config.RemoteWhitelists {
 		content, err := downloadFile(url)
 		if err != nil {
-			logf("Failed to download file from %s: %v\n", url, err)
+			logf("Failed to download file from %s: %v\n", redactURL(url), err)
 			continue
 		}
 		addresses := parseIPAddresses(content)
@@ -181,7 +181,7 @@ func runUpdate(config *Config, notifiers []Notifier, subjectPrefix string) error
 	for _, url := range config.RemoteBlocklists {
 		content, err := downloadFile(url)
 		if err != nil {
-			logf("Failed to download file from %s: %v\n", url, err)
+			logf("Failed to download file from %s: %v\n", redactURL(url), err)
 			remoteBlocklistFailures++
 			continue
 		}
@@ -208,17 +208,13 @@ func runUpdate(config *Config, notifiers []Notifier, subjectPrefix string) error
 		}
 	}
 
-	reload := os.Getenv("RESTART_CONTAINERS") != "false"
+	reload := shouldReloadNginx()
 	if err := applyBlocklist(whitelist, blocklist, config, reload); err != nil {
 		logf("%v\n", err)
 		notify(notifiers, subjectPrefix+"Blocklist apply failed", err.Error())
 		return err
 	}
 
-	if reload {
-		logf("Blocklist applied and nginx reloaded successfully.\n")
-	} else {
-		logf("Blocklist applied (RESTART_CONTAINERS=false: reload skipped, handle externally).\n")
-	}
+	logBlocklistSuccess(config, reload)
 	return nil
 }

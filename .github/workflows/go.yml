@@ -44,6 +44,9 @@ jobs:
       - name: Lint shell scripts
         run: shellcheck -S warning deploy/install.sh scripts/*.sh
 
+      - name: Test native installer upgrades
+        run: bash tests/native-install.sh
+
       - name: Build and smoke-test Docker image
         run: |
           docker build --pull -t etr:hardening-test .

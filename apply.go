@@ -7,8 +7,9 @@ import (
 )
 
 // applyBlocklist writes the new blocklist, validates that nginx accepts it,
-// rolls back on any failure, and only then reloads. This guarantees we never
-// leave nginx in a state where a subsequent reload/restart would fail.
+// rolls back on handled failures, and requests a reload. Validation depends
+// on the build variant; Docker does not run nginx -t before restarting.
+// This is not a crash-recovery transaction.
 //
 // When reload is false, the file is written and (where possible) validated,
 // but the reload step is skipped — the caller is expected to reload nginx

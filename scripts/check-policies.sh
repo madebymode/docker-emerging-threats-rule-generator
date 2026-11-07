@@ -43,7 +43,7 @@ for ubuntu in 20.04 22.04 24.04 26.04; do
     export DEBIAN_FRONTEND=noninteractive
     apt-get -qq update >/dev/null
     apt-get -qq install -y apparmor >/dev/null 2>&1
-    for p in etr-daemon etr-update etr-apply; do
+    for p in etr-daemon etr-update; do
       touch /etc/apparmor.d/local/$p
       cp /src/$p /etc/apparmor.d/$p
       apparmor_parser --skip-kernel-load --skip-cache --skip-read-cache /etc/apparmor.d/$p 2>&1 \

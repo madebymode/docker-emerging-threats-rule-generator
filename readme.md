@@ -130,6 +130,13 @@ grep docker /etc/group | cut -d: -f3
 
 Set `group_add` in `docker-compose.yml` to that GID. The container runs entirely as the unprivileged `etr-updater` user (uid 1000) — no root, no crond, no privilege dropping. `group_add` grants the container's user access to the mounted Docker socket.
 
+Access to a rootful Docker socket grants host-level authority despite the
+container's nonroot UID and dropped capabilities. For deployments requiring
+privilege separation, set `RESTART_CONTAINERS=false`, remove the socket mount
+and its `group_add`, and use an administrator-controlled apply/reload workflow.
+The [native install](native-install.md) provides a separate root validator.
+See the [project security review](security-review.md) for remaining boundaries.
+
 ### 4. Bring it up
 
 ```bash

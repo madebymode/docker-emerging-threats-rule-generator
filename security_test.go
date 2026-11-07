@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,29 @@ import (
 
 	"nginx_blacklist/internal/blocklistfmt"
 )
+
+func TestDownloadErrorsRedactCredentials(t *testing.T) {
+	for _, raw := range []string{"https://user:secret@127.0.0.1/list?token=secret", "https://example.com/%secret"} {
+		if err := validateURL(raw); err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("validation error exposed credentials: %v", err)
+		}
+	}
+	originalValidator, originalTransport := validateURLFunc, downloadClient.Transport
+	t.Cleanup(func() { validateURLFunc, downloadClient.Transport = originalValidator, originalTransport })
+	validateURLFunc = func(string) error { return nil }
+	for _, failedRequest := range []bool{false, true} {
+		downloadClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+			if failedRequest {
+				return nil, errors.New("connection failed")
+			}
+			return &http.Response{StatusCode: 403, Status: "403 Forbidden", Body: io.NopCloser(strings.NewReader(""))}, nil
+		})
+		_, err := downloadFile("https://user:secret@example.com/list?token=secret")
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("download error exposed credentials: %v", err)
+		}
+	}
+}
 
 func TestDownloadRejectsUnsafeRedirects(t *testing.T) {
 	original := validateURLFunc

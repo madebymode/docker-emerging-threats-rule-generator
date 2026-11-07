@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,25 @@ import (
 	"testing"
 	"time"
 )
+
+func TestNotificationErrorsDoNotExposeURLTokens(t *testing.T) {
+	original := httpClient.Transport
+	t.Cleanup(func() { httpClient.Transport = original })
+	httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection failed")
+	})
+	for _, notifier := range []Notifier{
+		TelegramNotifier{Token: "secret", ChatID: "123"},
+		WebhookNotifier{URL: "https://example.com/secret?token=secret"},
+		WebhookNotifier{URL: "https://example.com/%secret"},
+		StandardWebhookNotifier{URL: "https://example.com/secret", Secret: "secret"},
+	} {
+		err := notifier.Send("test", "test")
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Errorf("%s error exposed a token: %v", notifier.Name(), err)
+		}
+	}
+}
 
 // clearNotifyEnv unsets all notification-related ENV vars.
 func clearNotifyEnv(t *testing.T) {

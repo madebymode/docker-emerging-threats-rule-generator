@@ -11,8 +11,9 @@ Type=oneshot
 # daemon re-executes it, and rolls back if the daemon does not stay up.
 # Settings: ETR_AUTO_UPDATE, ETR_UPDATE_PIN, ETR_UPDATE_DELAY_HOURS in etr.env.
 #
-# Runs as etr, like the daemon: a malicious release could do no more than the
-# daemon can. etr-apply is root and is never updated by this unit.
+# Runs as etr, with permission to replace the unprivileged executable.
+# etr-apply is root and is never updated by this unit. A malicious release
+# can still affect blocking decisions; signing is not a safety guarantee.
 User=etr
 Group=etr
 ExecStart=/opt/etr/bin/etr-linux --self-update

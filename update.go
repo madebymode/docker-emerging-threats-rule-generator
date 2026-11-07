@@ -66,6 +66,9 @@ var daemonHealthy = func(pid int, exe string) bool {
 // binary. Settings come from the environment (see native-install.md):
 // ETR_AUTO_UPDATE, ETR_UPDATE_PIN, ETR_UPDATE_DELAY_HOURS.
 func selfUpdate() error {
+	if os.Geteuid() == 0 {
+		return fmt.Errorf("refusing to self-update as root; run etr-update.service or invoke --self-update as the etr user")
+	}
 	if os.Getenv("ETR_AUTO_UPDATE") == "false" {
 		logf("ETR_AUTO_UPDATE=false: self-update disabled\n")
 		return nil

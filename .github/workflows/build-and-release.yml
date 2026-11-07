@@ -182,6 +182,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Test native installer upgrades
+        run: bash tests/native-install.sh
+
       - name: Build and check policies
         run: scripts/check-policies.sh dist
 

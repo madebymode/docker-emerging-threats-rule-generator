@@ -56,6 +56,16 @@ There are two kinds of release:
    `etr-apply`, a unit or a policy reach a host only when someone reruns
    `install.sh`.
 
+   For the apply-helper AppArmor retirement, publish the updated deployment
+   bundle in the signed release before directing users to rerun installation.
+   The current bootstrap installer rejects older bundles that still ship the
+   helper profile. The migration unloads that profile, backs up the test-box
+   troubleshooting drop-ins, and preserves configuration; daemon self-update
+   alone cannot perform it. Native installer migration tests gate signing.
+   The install-mode feature also requires the new daemon binary and deployment
+   bundle together: old daemons do not understand cron/generator staging mode.
+   The bootstrap rejects bundles without the managed mode environment file.
+
 6. **Verify it** (optional, anyone can do this):
 
    ```bash

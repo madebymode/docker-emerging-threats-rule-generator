@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"nginx_blacklist/internal/blocklistfmt"
@@ -91,7 +92,9 @@ func readStaged(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer root.Close()
-	f, err := root.Open(filepath.Base(path))
+	// Nonblocking open prevents an attacker-owned FIFO from hanging root
+	// before f.Stat can reject it. Regular files retain normal read behavior.
+	f, err := root.OpenFile(filepath.Base(path), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}

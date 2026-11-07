@@ -263,3 +263,12 @@ func TestSignalRunningDaemonIgnoresStalePID(t *testing.T) {
 		t.Fatal("invalid pid file accepted")
 	}
 }
+
+func TestSelfUpdateRefusesRoot(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root; also covered by the Linux binary smoke check")
+	}
+	if err := selfUpdate(); err == nil || !strings.Contains(err.Error(), "refusing to self-update as root") {
+		t.Fatalf("root self-update was not rejected: %v", err)
+	}
+}

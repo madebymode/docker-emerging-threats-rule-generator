@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -91,7 +92,7 @@ var validateURLFunc = validateURL
 func validateURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("invalid URL: %v", err)
+		return fmt.Errorf("invalid URL")
 	}
 	if u.Scheme != "https" {
 		return fmt.Errorf("URL scheme must be https, got %q", u.Scheme)
@@ -107,7 +108,7 @@ func validateURL(rawURL string) error {
 	for _, addr := range addrs {
 		ip := net.ParseIP(addr)
 		if ip != nil && isPrivateIP(ip) {
-			return fmt.Errorf("URL %q resolves to reserved address %s", rawURL, addr)
+			return fmt.Errorf("URL %q resolves to reserved address %s", redactURL(rawURL), addr)
 		}
 	}
 	return nil
@@ -149,7 +150,7 @@ func downloadFile(rawURL string) (string, error) {
 	start := time.Now()
 	resp, err := downloadClient.Get(rawURL)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("fetching %s: %v", redactURL(rawURL), safeHTTPError(err))
 	}
 	defer resp.Body.Close()
 
@@ -161,7 +162,7 @@ func downloadFile(rawURL string) (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		logf("GET %s -> %s%s\n", redactURL(rawURL), resp.Status, redirect)
-		return "", fmt.Errorf("error fetching URL %s: status code %d", rawURL, resp.StatusCode)
+		return "", fmt.Errorf("error fetching URL %s: status code %d", redactURL(rawURL), resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
@@ -175,6 +176,19 @@ func downloadFile(rawURL string) (string, error) {
 	logf("GET %s -> %s, %d bytes in %s%s\n", redactURL(rawURL), resp.Status, len(body),
 		time.Since(start).Round(time.Millisecond), redirect)
 	return string(body), nil
+}
+
+// HTTP errors include the complete request URL, including query credentials
+// and Telegram/webhook tokens in the path. Keep the cause, never that URL.
+func safeHTTPError(err error) error {
+	var requestErr *url.Error
+	if errors.As(err, &requestErr) {
+		if requestErr.Op == "parse" {
+			return errors.New("invalid request URL")
+		}
+		return safeHTTPError(requestErr.Err)
+	}
+	return err
 }
 
 // redactURL drops credentials and query strings, which feed providers often

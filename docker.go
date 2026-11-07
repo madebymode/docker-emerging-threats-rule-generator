@@ -25,6 +25,18 @@ func preflight() error {
 	return checkRuntime(os.Geteuid(), allowedConfDir)
 }
 
+func shouldReloadNginx() bool {
+	return os.Getenv("RESTART_CONTAINERS") != "false"
+}
+
+func logBlocklistSuccess(_ *Config, reload bool) {
+	if reload {
+		logf("Blocklist applied and nginx reloaded successfully.\n")
+	} else {
+		logf("Blocklist applied (RESTART_CONTAINERS=false: reload skipped, handle externally).\n")
+	}
+}
+
 // selfUpdate is native-only: containers are updated by pulling a new image.
 func selfUpdate() error {
 	return fmt.Errorf("self-update is not available in the Docker image; pull a new image instead")

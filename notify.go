@@ -46,7 +46,7 @@ func (t TelegramNotifier) Send(subject, body string) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", t.Token)
 	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("post: %v", err)
+		return fmt.Errorf("post: %v", safeHTTPError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -107,13 +107,13 @@ func (s SlackNotifier) Send(subject, body string) error {
 	}
 	req, err := http.NewRequest(http.MethodPost, "https://slack.com/api/chat.postMessage", bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("build request: %v", err)
+		return fmt.Errorf("build request: %v", safeHTTPError(err))
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	req.Header.Set("Authorization", "Bearer "+s.Token)
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("post: %v", err)
+		return fmt.Errorf("post: %v", safeHTTPError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -142,25 +142,27 @@ func (s SlackNotifier) Send(subject, body string) error {
 // specification (https://github.com/standard-webhooks/standard-webhooks).
 //
 // Signature protocol:
-//   canonical = <msg_id> "." <unix_timestamp> "." <raw_body>
-//   signature = base64(HMAC-SHA256(secret_bytes, canonical))
-//   headers: webhook-id:        <msg_id>
-//            webhook-timestamp: <unix seconds>
-//            webhook-signature: v1,<base64 signature>
+//
+//	canonical = <msg_id> "." <unix_timestamp> "." <raw_body>
+//	signature = base64(HMAC-SHA256(secret_bytes, canonical))
+//	headers: webhook-id:        <msg_id>
+//	         webhook-timestamp: <unix seconds>
+//	         webhook-signature: v1,<base64 signature>
 //
 // The secret may be provided with or without the "whsec_" prefix. When present,
 // the prefix is stripped and the remainder is base64-decoded to yield the raw
 // HMAC key bytes (matching the reference Go library).
 //
 // Payload shape (envelope form recommended by the spec, camelCase fields):
-//   {
-//     "type": <event type — e.g. "slack.notification">,
-//     "timestamp": <RFC 3339 ISO 8601>,
-//     "data": {
-//       "from": <from>, "body": <body>, "title": <subject>,
-//       "slackChannelId": <optional>, "slackChannelName": <optional>
-//     }
-//   }
+//
+//	{
+//	  "type": <event type — e.g. "slack.notification">,
+//	  "timestamp": <RFC 3339 ISO 8601>,
+//	  "data": {
+//	    "from": <from>, "body": <body>, "title": <subject>,
+//	    "slackChannelId": <optional>, "slackChannelName": <optional>
+//	  }
+//	}
 //
 // EventType defaults to "slack.notification" (accepted by mode-iris's
 // /messaging/standard/slack endpoint). From defaults to INSTANCE_NAME (or "ETR")
@@ -225,7 +227,7 @@ func (s StandardWebhookNotifier) Send(subject, body string) error {
 
 	req, err := http.NewRequest(http.MethodPost, s.URL, bytes.NewReader(rawBody))
 	if err != nil {
-		return fmt.Errorf("build request: %v", err)
+		return fmt.Errorf("build request: %v", safeHTTPError(err))
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	req.Header.Set("webhook-id", msgID)
@@ -234,7 +236,7 @@ func (s StandardWebhookNotifier) Send(subject, body string) error {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("post: %v", err)
+		return fmt.Errorf("post: %v", safeHTTPError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -281,7 +283,7 @@ func (w WebhookNotifier) Send(subject, body string) error {
 	}
 	resp, err := httpClient.Post(w.URL, "application/json", bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("post: %v", err)
+		return fmt.Errorf("post: %v", safeHTTPError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

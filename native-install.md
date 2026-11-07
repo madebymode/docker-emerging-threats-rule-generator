@@ -1,7 +1,8 @@
 # Native Install (no Docker)
 
 The native build runs ETR directly on an nginx host under systemd. It is split
-so that nothing which touches the network, or updates itself, runs as root:
+so that downloaded generator/updater code runs as the unprivileged `etr` user.
+Nginx application is separately controlled by the root operator:
 
 | Part | Runs as | Can write | Job |
 |---|---|---|---|
@@ -9,28 +10,39 @@ so that nothing which touches the network, or updates itself, runs as root:
 | `etr-apply.path` → `etr-apply.service` (`/usr/local/sbin/etr-apply`) | root | the nginx include file, `/var/lib/etr-apply` | Rejects the staged file unless every line is an `<ip-or-cidr> <label>;` entry in one `geo` block, then installs it, runs `nginx -t`, reloads nginx and restores the previous file on failure |
 | `etr-update.timer` → `etr-update.service` | `etr` | `/opt/etr/bin` | Installs signed `v3.X.Y` releases of the daemon. Never touches `etr-apply` |
 
-So a compromised daemon, or a malicious release, can at most change which IPs
-are blocked: it cannot write nginx configuration, run anything as root, or
-block the whole internet (`etr-apply` refuses prefixes broader than /8 for
-IPv4 and /16 for IPv6).
+The updater cannot replace the root apply helper, its systemd unit, or root
+configuration. The helper accepts data in a strict IP/CIDR-and-label grammar,
+not commands or arbitrary nginx directives, and rejects individual prefixes
+broader than /8 for IPv4 or /16 for IPv6. Malicious data or a compromised
+updater can still disrupt blocking decisions; privilege separation reduces
+exposure rather than guaranteeing the absence of vulnerabilities. Root must
+never execute binaries or scripts from `/opt/etr/bin`, which `etr` can write,
+or include the staged file directly in nginx configuration.
 
 Each platform's mandatory access control adds a second layer:
 
 | Platform | MAC | Policy |
 |---|---|---|
 | RHEL 8 / 9 / 10, Rocky, AlmaLinux, Oracle Linux | SELinux (enforcing by default) | `etr` module: domains `etr_t`, `etr_update_t`, `etr_apply_t` ([`deploy/selinux`](deploy/selinux)) |
-| Ubuntu 20.04 / 22.04 / 24.04 / 26.04, incl. ServerPilot | AppArmor | profiles `etr-daemon`, `etr-update`, `etr-apply` ([`deploy/apparmor`](deploy/apparmor)) |
+| Ubuntu 20.04 / 22.04 / 24.04 / 26.04, incl. ServerPilot | AppArmor | profiles `etr-daemon`, `etr-update` ([`deploy/apparmor`](deploy/apparmor)) |
 
 The policy is what keeps the daemon from replacing its own binary: it and the
 updater run as the same user, but only the updater's domain/profile may write
-`/opt/etr/bin`. `nginx -t` runs in nginx's own domain (`httpd_t`) or a child
-profile, so `etr-apply` never reads TLS keys itself.
+`/opt/etr/bin`. On Ubuntu, the root apply helper has no custom AppArmor
+profile. It uses systemd filesystem restrictions, a capability bound (including
+`CAP_NET_BIND_SERVICE` for nginx's listener tests), a private temporary
+directory, and device access controls. The helper can read the host's nginx
+configuration and TLS keys. Its strict staged-file validation and rollback
+remain in place. On RHEL, the existing SELinux policy still runs `nginx -t`
+in nginx's own domain (`httpd_t`). The helper omits seccomp settings that would
+implicitly enable `no_new_privs` and prevent that SELinux transition; the
+daemon and updater retain their existing hardening.
 
 ---
 
 ## 1. Install or upgrade
 
-As root, on a host where nginx is already installed and running:
+As root (nginx is required for `systemd` and `cron` modes):
 
 ```bash
 REPO=madebymode/docker-emerging-threats-rule-generator
@@ -39,24 +51,116 @@ less /tmp/etr-install.sh          # read it: it runs as root
 bash /tmp/etr-install.sh          # or: --tag v3.X.Y, --nginx serverpilot, --no-auto-update
 ```
 
+### Choose who applies the blocklist
+
+| Installer option | Unprivileged generator | Root integration |
+|---|---|---|
+| `--apply-mode systemd` (new-install default) | Stages the list and waits for the root helper's result | Installs the fixed helper and a systemd path watcher that applies changes automatically |
+| `--apply-mode cron` | Stages the list without waiting for root | Installs the fixed helper/unit; no watcher or cron job. You schedule root application yourself |
+| `--apply-mode generator` | Stages the list without waiting for root | No root helper, apply unit, watcher, or cron job is installed; nginx is not required |
+
+Every mode installs the generator and its unprivileged self-update unit.
+Use `--no-auto-update` to leave the updater timer disabled and perform updates
+only after review. Reinstalling preserves a disabled timer; `--auto-update`
+explicitly enables it again. The bootstrap installer still needs root to create the
+system user, ownership, and units; normal generation never runs as root.
+
+For an operator-owned root cron schedule, install:
+
+```bash
+bash /tmp/etr-install.sh --apply-mode cron --nginx serverpilot --no-auto-update
+```
+
+Then create `/etc/cron.d/etr-apply` yourself, owned by root and mode `0644`:
+
+```cron
+SHELL=/bin/sh
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+*/5 * * * * root /usr/bin/systemctl start etr-apply.service
+```
+
+The cron job starts a root-owned systemd unit, which runs the separately
+installed `/usr/local/sbin/etr-apply`. It validates the newest staged data,
+installs it atomically, tests nginx, and reloads/restarts nginx with rollback
+on failure. systemd serializes overlapping starts, and identical lists skip
+the nginx restart. This is intentionally an apply-and-reload job: reloading
+nginx alone does not install the staged list. Inspect errors with
+`journalctl -u etr-apply`; in cron mode the generator does not wait for or
+report root apply failures. Until cron succeeds, nginx keeps its previous
+live list. For the first install, run `systemctl start etr-apply.service`
+after the generator has staged a list and before using snippets that refer
+to `$blocked_source`.
+
+For generation with no root helper installed:
+
+```bash
+bash /tmp/etr-install.sh --apply-mode generator --no-auto-update
+```
+
+Output stays at `/var/lib/etr/blocklist.conf`, outside nginx's configuration.
+A separate, reviewed root workflow must validate it, copy it into a root-owned
+live include, run `nginx -t`, and reload/restart with rollback. Do not source
+`etr`-writable files or execute the downloadable daemon as root. Switching
+to `--apply-mode cron` later installs the fixed validator for that workflow.
+
+The selected mode is stored in root-owned `/etc/etr/apply-mode.env` and loaded
+after `etr.env`. Reruns keep it unless `--apply-mode` explicitly changes it.
+Moving to cron/generator disables and retires the automatic root watcher;
+generator mode also backs up and retires any installed helper/unit. Existing
+live configuration is preserved. Operator-owned cron jobs are never edited:
+remove or adjust your cron job when changing modes. Switching back to
+`--apply-mode systemd` reinstalls the helper and watcher. The mode controls
+normal generator behavior; the actual privilege boundary remains filesystem
+ownership, service permissions and the fixed validator.
+
 `install.sh`:
 
 1. downloads the newest signed `v3.X.Y` release and checks `manifest.json`
-   against `release-signing.pub` (OpenSSL 3; on OpenSSL 1.1, i.e. RHEL 8 and
-   Ubuntu 20.04, it checks SHA-256 only and tells you how to verify provenance
-   with `gh attestation verify`), then every file's SHA-256;
+   against `release-signing.pub` using OpenSSL with Ed25519 `-rawin` support,
+   then every file's SHA-256. It refuses an unverified download. Hosts with
+   older OpenSSL need a supported OpenSSL installation before downloading
+   releases with this installer;
 2. creates the `etr` system user, `/opt/etr/bin` (owned by `etr`),
-   `/usr/local/sbin/etr-apply` (root), `/etc/etr` and `/var/lib/etr`;
+   `/etc/etr` and `/var/lib/etr`, plus `/usr/local/sbin/etr-apply` (root)
+   in `systemd` and `cron` modes;
 3. writes `/etc/etr/config.json` with the default lists if there is none, and
    `/etc/etr/apply.env` for your nginx (ServerPilot is detected from
    `nginx-sp.service`);
-4. installs the SELinux module on RHEL or the AppArmor profiles on Ubuntu. It
-   stops if that platform's MAC is disabled; pass `--no-mac` to install
-   without it;
-5. installs and starts the units. The first update runs immediately.
+4. installs the SELinux module on RHEL or the daemon and updater AppArmor
+   profiles on Ubuntu. It stops if that platform's MAC is disabled; pass
+   `--no-mac` to install without it;
+5. installs the units for the selected mode and restarts the daemon. Only
+   `systemd` mode starts the root watcher and applies an existing staged list.
+   On a new install, generation runs immediately in every mode.
 
 Rerunning it upgrades in place and keeps `config.json`, `etr.env` and
-`apply.env`.
+`apply.env`. Existing services are stopped before replacing binaries and
+restarted with the new units; nginx is restarted only if applying a changed
+blocklist requires it.
+
+### Upgrading an existing v3 install
+
+Rerun `install.sh` using a signed release that includes this migration. Merely
+fetching a newer bootstrap installer does not change the units inside an older
+signed release: the installer rejects bundles that still select the retired
+apply-helper AppArmor profile, before stopping services or changing files.
+Self-update replaces only the daemon and cannot perform this migration.
+
+The installer unloads `etr-apply` and its child profiles from the kernel and
+moves `/etc/apparmor.d/etr-apply` and `/etc/apparmor.d/local/etr-apply` into a
+root-only directory under `/etc/etr/migration-backups/apply.*`. It also backs
+up and retires these troubleshooting drop-ins from `etr-apply.service.d`:
+
+- `profile-transitions.conf`
+- `bind-ports.conf`
+
+Other drop-ins, configuration, staged lists and the live nginx include are
+preserved. Review any other custom override that explicitly selects
+`AppArmorProfile=etr-apply`; it must be removed before running the new unit.
+Retirement also runs with `--no-mac`, since the old profile's executable-path
+attachment would otherwise continue to confine the helper. Rerunning the
+installer after migration is safe and does not create another backup unless
+retired files have reappeared.
 
 ### Upgrading from the root daemon
 
@@ -75,7 +179,9 @@ setup (see the [Configuration table](readme.md#configuration-configjson)),
 except:
 
 - `nginx_conf_file_path` must be `/var/lib/etr/blocklist.conf`: the daemon
-  can write nowhere else.
+  can write nowhere else. In `cron` and `generator` modes, staging succeeds
+  without waiting for a root service; validation and live-file rollback happen
+  in the separately scheduled root workflow.
 - `nginx_container_names` and `nginx_service_name` are ignored; nginx is set
   in `apply.env`.
 
@@ -89,11 +195,12 @@ except:
 
 `ETR_LIVE_FILE` must be included at `http` level, because nginx allows `geo`
 only there. ServerPilot's `http.d/` is; its `vhosts.d/APP.d/` is included
-inside `server` blocks and is not. `etr-apply` may write only
-`/etc/nginx/conf.d` and `/etc/nginx-sp/http.d` (systemd `ReadWritePaths=`, the
-AppArmor profile and the SELinux label all say so). For another directory,
-add it in a drop-in (`systemctl edit etr-apply.service`) and, on Ubuntu, in
-`/etc/apparmor.d/local/etr-apply`.
+inside `server` blocks and is not. Within `/etc`, systemd makes only
+`/etc/nginx/conf.d` and `/etc/nginx-sp/http.d` writable for `etr-apply`.
+`/var` remains writable so nginx can open logs and create runtime files.
+For another live include directory under `/etc`, add `ReadWritePaths=` in a
+drop-in (`systemctl edit etr-apply.service`). On RHEL, the directory also needs
+the nginx configuration SELinux label.
 
 Optional daemon settings go in `/etc/etr/etr.env` (root, 0600; systemd reads
 it before dropping privileges): `INSTANCE_NAME`, `ETR_AT_HOUR`,
@@ -127,6 +234,10 @@ or proxy on another port, run `setsebool -P etr_connect_any on`.
 ---
 
 ## 4. Enforcement and block logging
+
+The installer connects the ETR services to journald automatically. It does
+not install nginx enforcement or blocked-request logging snippets: add the
+configuration below for your sites. Installing a list alone does not enforce it.
 
 Block logs use the Aetos ETR JSON format, the same fields the Docker ETR nginx
 writes in production. Only requests ETR blocked are logged. `request_id` is
@@ -195,7 +306,7 @@ systemctl status etr etr-apply.path
 journalctl -u etr -u etr-apply -f
 ```
 
-The first start builds the blocklist right away:
+In `systemd` mode, the first start builds and applies the blocklist right away:
 
 ```
 etr[...]:       Wrote 12143 entries to /var/lib/etr/blocklist.conf: ...
@@ -208,6 +319,11 @@ Run an update now with `systemctl restart etr`. For a one-off run from a
 shell, run it as `etr`, never as root (the binary directory is writable by
 `etr`, and the daemon refuses to start as root):
 `sudo -u etr /opt/etr/bin/etr-linux --force`.
+
+For a one-off generation in `cron` or `generator` mode, also pass the mode
+explicitly; commands launched outside systemd do not inherit its environment
+files. For example:
+`sudo -u etr env ETR_APPLY_MODE=cron /opt/etr/bin/etr-linux --force`.
 
 To confirm confinement:
 
@@ -235,7 +351,9 @@ matters.
 
 ## 6. Automatic updates
 
-`install.sh` enables `etr-update.timer` unless you pass `--no-auto-update`.
+On a fresh install, `install.sh` enables `etr-update.timer` unless you pass
+`--no-auto-update`. On reinstall it preserves an existing disabled timer;
+`--auto-update` explicitly re-enables it.
 It checks once a day at a random time per host and installs the newest signed
 `v3.MINOR.PATCH` release; timestamped `master` builds and v2 releases are
 ignored. Each update:
@@ -265,6 +383,13 @@ rerunning `install.sh`; release notes say when that is needed.
 Check with `journalctl -u etr-update`, or update now with
 `systemctl start etr-update`.
 
+For administrator-controlled production changes, use `--no-auto-update` and
+review releases before installing them. This disables software updates, not
+scheduled threat-feed refreshes. There is currently no notification-only
+release checker: disabling the updater does not send update-available alerts.
+Signed APT/DNF packaging and a notification-only checker are recommendations
+in [the project review](security-review.md), not implemented install options.
+
 ## Uninstall
 
 ```bash
@@ -272,6 +397,7 @@ systemctl disable --now etr etr-apply.path etr-update.timer
 rm /etc/systemd/system/etr{,-update,-apply}.service /etc/systemd/system/etr-update.timer \
    /etc/systemd/system/etr-apply.path /usr/local/sbin/etr-apply
 rm -r /opt/etr /var/lib/etr /var/lib/etr-apply
+# If you created an operator-owned cron job, remove it separately.
 systemctl daemon-reload
 semodule -r etr 2>/dev/null                        # RHEL
 for p in etr-daemon etr-update etr-apply; do       # Ubuntu
@@ -294,6 +420,7 @@ live include, otherwise nginx fails with `unknown "blocked_source" variable`.
 | `nginx_conf_file_path ... is outside allowed directory "/var/lib/etr"` | A `config.json` from before the split. Set it to `/var/lib/etr/blocklist.conf`, or rerun `install.sh`. |
 | `refusing to run as root` | Run the binary as `etr` (`sudo -u etr ...`) or through `systemctl`. |
 | `status=203/EXEC` on RHEL | Labels. `restorecon -RFv /opt/etr /usr/local/sbin/etr-apply`. |
+| Old `etr-apply` AppArmor denials (binary execution, PID/scratch files, listeners or systemctl bus access) | Rerun `install.sh` with a release containing the apply-profile retirement migration. It removes the old helper profile and known troubleshooting drop-ins while retaining daemon/updater confinement. |
 | SELinux denial (`ausearch -m avc -ts recent`) or AppArmor denial (`journalctl -k \| grep DENIED`) | Report it with the log line. A local workaround for AppArmor goes in `/etc/apparmor.d/local/<profile>`. |
 | `0/N remote blocklists fetched` | Outbound HTTPS is blocked. Set `HTTPS_PROXY` in `etr.env`; on RHEL with a proxy on an unusual port, `setsebool -P etr_connect_any on`. |
 | `Warning: ignoring unknown config key` | A key in `config.json` is misspelled, so that setting is not applied. |
@@ -304,6 +431,16 @@ OpenSSL. If hosts must use only FIPS-validated crypto, check with whoever owns
 that requirement before deploying.
 
 ## Testing a change
+
+`bash tests/native-install.sh` exercises the installer in a disposable Ubuntu
+container: fresh install, migration of the patched ServerPilot setup, repeat
+installs, configuration and custom override preservation, retirement with
+`--no-mac`, old root-daemon migration, unload failure, and rejection of old
+deployment bundles. It uses real filesystem operations and Ubuntu's policy/unit
+syntax checkers; systemd and AppArmor kernel operations are simulated. It
+also tests mode persistence, migration from automatic to cron/generator,
+generator installs without nginx or a root helper asset, and switching back
+to automatic application.
 
 `scripts/check-policies.sh` builds and checks the policies in containers.
 `scripts/vm-check.sh` installs everything on a disposable host and runs the

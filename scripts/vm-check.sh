@@ -122,6 +122,8 @@ if [[ $selinux -eq 1 ]]; then
 fi
 if [[ $apparmor -eq 1 ]]; then
   check "daemon is confined by etr-daemon" grep -q '^etr-daemon (enforce)' "/proc/$pid/attr/current"
+  check "retired apply profile is not installed" test ! -e /etc/apparmor.d/etr-apply
+  check "retired apply profile is not loaded" bash -c '! grep -q "^etr-apply " /sys/kernel/security/apparmor/profiles'
 fi
 
 # --- hostile staged file -----------------------------------------------------
