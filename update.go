@@ -69,8 +69,8 @@ func selfUpdate() error {
 	if os.Geteuid() == 0 {
 		return fmt.Errorf("refusing to self-update as root; run etr-update.service or invoke --self-update as the etr user")
 	}
-	if os.Getenv("ETR_AUTO_UPDATE") == "false" {
-		logf("ETR_AUTO_UPDATE=false: self-update disabled\n")
+	if os.Getenv("ETR_AUTO_UPDATE") != "true" {
+		logf("Self-update disabled: ETR_AUTO_UPDATE=true is required\n")
 		return nil
 	}
 	keys, err := parseReleaseKeys(releaseSigningKeysPEM)
@@ -113,15 +113,7 @@ func selfUpdate() error {
 	}
 
 	base := "https://github.com/" + updateRepo + "/releases/download/" + target + "/"
-	manifestData, err := downloadFile(base + "manifest.json")
-	if err != nil {
-		return err
-	}
-	sig, err := downloadFile(base + "manifest.json.sig")
-	if err != nil {
-		return err
-	}
-	manifest, err := verifyManifest([]byte(manifestData), []byte(sig), keys, target)
+	manifest, err := fetchReleaseManifest(target, keys)
 	if err != nil {
 		return err
 	}
@@ -147,6 +139,20 @@ func selfUpdate() error {
 		return err
 	}
 	return installBinary(exe, []byte(binary), want, target)
+}
+
+// Both checking and installation authenticate metadata against embedded keys.
+func fetchReleaseManifest(target string, keys []ed25519.PublicKey) (*releaseManifest, error) {
+	base := "https://github.com/" + updateRepo + "/releases/download/" + target + "/"
+	data, err := downloadFile(base + "manifest.json")
+	if err != nil {
+		return nil, err
+	}
+	sig, err := downloadFile(base + "manifest.json.sig")
+	if err != nil {
+		return nil, err
+	}
+	return verifyManifest([]byte(data), []byte(sig), keys, target)
 }
 
 func parseReleaseKeys(data []byte) ([]ed25519.PublicKey, error) {

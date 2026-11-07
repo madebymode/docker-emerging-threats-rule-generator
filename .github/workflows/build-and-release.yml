@@ -292,7 +292,7 @@ jobs:
           - \`etr-deploy.tar.gz\`: systemd units, AppArmor profiles, SELinux modules and \`install.sh\`
           - \`manifest.json\`, \`manifest.json.sig\`: SHA-256 of every asset above, signed with the key in [\`release-signing.pub\`](https://github.com/$REPO/blob/$TAG/release-signing.pub)
 
-          Hosts with \`etr-update.timer\` install this release once it is \`ETR_UPDATE_DELAY_HOURS\` old (default 72). New hosts, or changes to \`etr-apply\`, units or policies: run \`deploy/install.sh\`. See [native-install.md](https://github.com/$REPO/blob/$TAG/native-install.md) and [releasing.md](https://github.com/$REPO/blob/master/releasing.md#cutting-a-signed-release) to verify a download.
+          Hosts explicitly opted into \`etr-update.timer\` install this release once it is \`ETR_UPDATE_DELAY_HOURS\` old (default 72). New hosts, or changes to \`etr-apply\`, units or policies: run \`deploy/install.sh\`. See [native-install.md](https://github.com/$REPO/blob/$TAG/native-install.md) and [releasing.md](https://github.com/$REPO/blob/master/releasing.md#cutting-a-signed-release) to verify a download.
           EOF
           gh release create "$TAG" --repo "$REPO" --draft --verify-tag \
             --title "Release $TAG" --notes-file notes.md \

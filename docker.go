@@ -44,6 +44,10 @@ func selfUpdate() error {
 
 const confPathHint = "Mount the shared nginx volume at /app/nginx/conf and write the blocklist inside it."
 
+func checkForUpdates() error {
+	return fmt.Errorf("release checking is native-only; manage Docker image updates through your deployment tooling")
+}
+
 // The daemon hooks below support native self-update and do nothing here.
 func daemonStarted() {}
 

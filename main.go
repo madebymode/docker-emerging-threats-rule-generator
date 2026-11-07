@@ -23,10 +23,22 @@ func main() {
 	force := flag.Bool("force", false, "Run one update immediately and exit, regardless of ETR_DAEMON")
 	showVersion := flag.Bool("version", false, "Print the version and exit")
 	update := flag.Bool("self-update", false, "Install the newest signed v3 release and exit (native build only)")
+	check := flag.Bool("check-update", false, "Check signed releases without installing software (native build only)")
 	flag.Parse()
+	if *check && *update {
+		logf("--check-update and --self-update cannot be combined\n")
+		os.Exit(2)
+	}
 
 	if *showVersion {
 		fmt.Println(version)
+		return
+	}
+	if *check {
+		if err := checkForUpdates(); err != nil {
+			logf("Release check failed: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if *update {

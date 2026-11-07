@@ -5,7 +5,7 @@ There are two kinds of release:
 | | Trigger | GitHub release | Docker tags | Installed by native hosts |
 |---|---|---|---|---|
 | **Development build** | every push to `master` | `v3-YYYY-MM-DD-HHMMSS`, unsigned | `v3`, `master`, `v3-YYYY-MM-DD-HHMMSS` | never |
-| **Signed release** | pushing a `v3.MINOR.PATCH` tag | `v3.MINOR.PATCH`, signed | `3.MINOR.PATCH`, `v3.MINOR.PATCH`, `v3` | yes, by `etr-update.timer` |
+| **Signed release** | pushing a `v3.MINOR.PATCH` tag | `v3.MINOR.PATCH`, signed | `3.MINOR.PATCH`, `v3.MINOR.PATCH`, `v3` | only with explicit opt-in, by `etr-update.timer` |
 
 ## Cutting a signed release
 
@@ -79,15 +79,23 @@ There are two kinds of release:
    gh attestation verify etr-linux-amd64 -R madebymode/docker-emerging-threats-rule-generator
    ```
 
+The release-check feature needs the new binary and deployment bundle together.
+The installer enables `etr-check-update.timer` by default and disables legacy
+software installation unless `--auto-update` is explicitly supplied. Publish
+those units and the update-policy environment support in the same signed
+release; the bootstrap rejects older bundles. Self-update alone does not perform
+that installer migration.
+
 ## After it is published
 
-Hosts with `etr-update.timer` install a release once it is older than
+Hosts explicitly opted into `etr-update.timer` install a release once it is older than
 `ETR_UPDATE_DELAY_HOURS` (default 72), counted from the signed manifest time.
 New hosts, and hosts on a build older than the signing setup, need one manual
 install with `deploy/install.sh` (see [native-install.md](native-install.md)).
 
-**A bad release:** delete it inside that window and no host will have
-installed it (`gh release delete v3.1.0 --cleanup-tag`). Then fix `master`
+**A bad release:** withdraw it promptly. Hosts may already have installed it
+through a manual install, a pin, or a shorter waiting period. Deleting it (`gh release delete v3.1.0 --cleanup-tag`) prevents subsequent downloads
+from that release. Then fix `master`
 and release the next patch version; never reuse a version number.
 
 **A failed run:** fix the problem on `master`, then release the next patch

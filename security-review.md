@@ -13,16 +13,13 @@ ETR self-update in package installations and make the executable and its parent
 directories root-owned. Run the generator as `etr`; offer the root validator as
 an optional component for automatic or administrator-scheduled application.
 
-Until packaging exists, use `--no-auto-update` and review releases before
-installing. The current fresh-install default still enables self-update.
-Reinstalling now preserves an already disabled timer. A notification-only
-release checker and APT/DNF packages are **not implemented** by this review.
-
-An update checker should run as `etr`, read and verify release metadata without
-executing downloaded code, and log the installed/available versions, release
-URL, and publication date. Configured notifications should be deduplicated by
-release with periodic reminders. Log failed checks separately; do not treat a
-failed check as “up to date.” Avoid an “update available” alert on every run.
+Follow-up implementation: software installation now requires explicit opt-in.
+Fresh installs enable daily metadata-only checks; installer reruns migrate legacy
+enabled timers to check-only unless `--auto-update` is supplied. The checker
+verifies signed metadata, logs release availability, and optionally notifies
+configured channels with per-channel deduplication and weekly reminders.
+It runs as `etr` with executable files read-only. APT/DNF packages are still
+not implemented. See [native-install.md](native-install.md#6-software-release-checks-and-opt-in-updates).
 
 Package installation still grants our releases substantial authority: package
 maintainer scripts can run as root. Packaging replaces custom update mechanics
@@ -124,8 +121,8 @@ directly in a privileged nginx instance.
 Native service output is connected to journald by the installed units.
 Nginx enforcement, blocked-request JSON logging, log retention/forwarding,
 and notifier credentials need operator configuration. Installing a geo list
-alone does not enforce blocking. Software-update availability alerts are not
-currently sent by the self-updater.
+alone does not enforce blocking. Software-update availability alerts are opt-in through the separate release
+checker; the self-updater does not send them.
 
 Reviewed areas include generator/config/feed processing, nginx formatting,
 native status acknowledgement and rollback, root helper and validator, update
@@ -154,6 +151,5 @@ Validation performed:
 Still required before rollout: a new signed deployment bundle containing these
 changes, live ServerPilot installation/upgrade testing, and enforcing-MAC VM
 checks across supported Ubuntu/RHEL versions. The full cross-distribution
-policy matrix was not rerun as part of this review. No APT/DNF repositories,
-packages, notification-only checker, or new software-update defaults have
-been shipped.
+policy matrix was not rerun as part of this review. APT/DNF repositories and packages remain unimplemented. The follow-up release
+checker and opt-in defaults require a new release and live installation testing.

@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily check for signed ETR releases
+Description=Opt-in installation of signed ETR releases
 
 [Timer]
 OnCalendar=daily

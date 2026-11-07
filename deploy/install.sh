@@ -2,13 +2,14 @@
 # Installs or upgrades native ETR on a systemd host (Ubuntu 20.04+, RHEL 8-10).
 #
 #   etr.service       daemon, user etr, writes only /var/lib/etr
-#   etr-update.timer  signed self-update, user etr, writes only /opt/etr/bin
+#   etr-check-update.timer  signed release checks, user etr, no installation
+#   etr-update.timer  opt-in self-update, user etr, writes only /opt/etr/bin
 #   etr-apply.path    root installer: validates /var/lib/etr/blocklist.conf
 #                     and installs it into nginx
 #
 # Usage (as root):
 #   install.sh [--tag v3.X.Y] [--from DIR] [--nginx nginx|serverpilot]
-#              [--apply-mode systemd|cron|generator] [--no-auto-update] [--no-mac]
+#              [--apply-mode systemd|cron|generator] [--auto-update|--no-auto-update] [--no-update-check] [--no-mac]
 #
 #   --tag      release to install (default: newest signed v3.X.Y release)
 #   --from     install binaries from DIR (etr-linux-ARCH, etr-apply-linux-ARCH,
@@ -18,8 +19,9 @@
 #   --apply-mode  systemd: apply on changes (default); cron: operator schedules
 #                 root apply; generator: stage lists only, no root helper
 #                 (reruns keep the previously selected mode)
-#   --auto-update     explicitly enable etr-update.timer
-#   --no-auto-update  disable it; reruns otherwise keep the timer state
+#   --auto-update     opt in to software installation (default: check only)
+#   --no-auto-update  revoke opt-in; reruns preserve recorded choices
+#   --no-update-check disable release checks; existing disabled checks stay off
 #   --no-mac   do not install the SELinux module (RHEL) or AppArmor profiles
 #              (Ubuntu). Without it, the platform's MAC must be enabled.
 #
@@ -29,7 +31,7 @@
 set -euo pipefail
 
 REPO=madebymode/docker-emerging-threats-rule-generator
-tag="" from="" flavour="" auto_update="" mac=1 apply_mode=""
+tag="" from="" flavour="" auto_update="" mac=1 apply_mode="" update_check=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -39,8 +41,9 @@ while [[ $# -gt 0 ]]; do
     --apply-mode) apply_mode=$2; shift 2 ;;
     --auto-update) auto_update=1; shift ;;
     --no-auto-update) auto_update=0; shift ;;
+    --no-update-check) update_check=0; shift ;;
     --no-mac) mac=0; shift ;;
-    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -65,11 +68,18 @@ case "$(uname -m)" in
   *) die "unsupported architecture $(uname -m)" ;;
 esac
 
-# Preserve an existing operator decision to disable updates on reinstall.
+# Old enabled timers were an installer default, not evidence of consent.
+# Only an explicit --auto-update records opt-in under the new policy.
 if [[ -z $auto_update ]]; then
-  auto_update=1
-  if systemctl cat etr-update.timer >/dev/null 2>&1 && ! systemctl is-enabled --quiet etr-update.timer; then
-    auto_update=0
+  auto_update=0
+  if [[ -f /etc/etr/update-policy.env ]] && grep -qx 'ETR_AUTO_UPDATE=true' /etc/etr/update-policy.env && systemctl is-enabled --quiet etr-update.timer; then
+    auto_update=1
+  fi
+fi
+if [[ -z $update_check ]]; then
+  update_check=1
+  if systemctl cat etr-check-update.timer >/dev/null 2>&1 && ! systemctl is-enabled --quiet etr-check-update.timer; then
+    update_check=0
   fi
 fi
 
@@ -146,7 +156,7 @@ fi
 for f in "${artifacts[@]}"; do
   [[ -f $src/$f ]] || die "missing $src/$f"
 done
-for unit in etr.service etr-update.service etr-update.timer etr-apply.service etr-apply.path; do
+for unit in etr.service etr-update.service etr-update.timer etr-check-update.service etr-check-update.timer etr-apply.service etr-apply.path; do
   [[ -f $deploy/systemd/$unit ]] || die "missing $deploy/systemd/$unit"
 done
 # The bootstrap installer can be newer than the signed release it downloads.
@@ -157,6 +167,10 @@ fi
 
 if ! grep -qx 'EnvironmentFile=-/etc/etr/apply-mode.env' "$deploy/systemd/etr.service"; then
   die "selected release does not support apply modes; select a newer signed release with --tag"
+fi
+
+if ! grep -qx 'EnvironmentFile=-/etc/etr/update-policy.env' "$deploy/systemd/etr-update.service"; then
+  die "selected release does not support opt-in software updates; select a newer signed release with --tag"
 fi
 
 # ---------------------------------------------------------------------------
@@ -183,7 +197,7 @@ log "apply mode: $apply_mode; nginx flavour: $flavour"
 # Stop existing services before replacing executables, units or confinement.
 # The updater must not race installation and the path watcher must not start
 # another helper while its old profile is being retired.
-for unit in etr-update.timer etr-update.service etr-apply.path etr.service; do
+for unit in etr-update.timer etr-update.service etr-check-update.timer etr-check-update.service etr-apply.path etr.service; do
   if systemctl cat "$unit" >/dev/null 2>&1; then
     systemctl stop "$unit" || die "could not stop $unit before upgrading"
   fi
@@ -266,6 +280,11 @@ chmod 0640 /etc/etr/config.json
 printf 'ETR_APPLY_MODE=%s\n' "$apply_mode" > /etc/etr/apply-mode.env
 chown root:root /etc/etr/apply-mode.env
 chmod 0644 /etc/etr/apply-mode.env
+# Load after etr.env: legacy ETR_AUTO_UPDATE values cannot bypass the decision.
+if [[ $auto_update == 1 ]]; then policy=true; else policy=false; fi
+printf 'ETR_AUTO_UPDATE=%s\n' "$policy" > /etc/etr/update-policy.env
+chown root:root /etc/etr/update-policy.env
+chmod 0644 /etc/etr/update-policy.env
 
 # The old layout set NGINX_CONF_DIR for the daemon; it now only writes /var/lib/etr.
 sed -i '/^NGINX_CONF_DIR=/d;/^NGINX_SERVICE=/d;/^ETR_SERVICE=/d' /etc/etr/etr.env
@@ -357,7 +376,7 @@ fi
 # Units
 # ---------------------------------------------------------------------------
 
-units=(etr.service etr-update.service etr-update.timer)
+units=(etr.service etr-update.service etr-update.timer etr-check-update.service etr-check-update.timer)
 [[ $apply_mode == generator ]] || units+=(etr-apply.service)
 [[ $apply_mode != systemd ]] || units+=(etr-apply.path)
 for unit in "${units[@]}"; do
@@ -381,6 +400,12 @@ if [[ $auto_update -eq 1 ]]; then
 else
   systemctl disable --now etr-update.timer 2>/dev/null || true
 fi
+if [[ $update_check -eq 1 ]]; then
+  systemctl enable --now etr-check-update.timer
+else
+  systemctl disable --now etr-check-update.timer
+fi
+log "Software auto-update: $policy; release checks: $update_check (journalctl -u etr-check-update)"
 command -v restorecon >/dev/null && restorecon -RF /var/lib/etr-apply 2>/dev/null || true
 
 # Never run /opt/etr/bin as root: etr can write it.

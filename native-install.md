@@ -8,7 +8,8 @@ Nginx application is separately controlled by the root operator:
 |---|---|---|---|
 | `etr.service` (`/opt/etr/bin/etr-linux`) | `etr` | `/var/lib/etr` | Downloads the lists on a schedule (default 03:00 local, up to 60 min jitter) and stages `/var/lib/etr/blocklist.conf` |
 | `etr-apply.path` → `etr-apply.service` (`/usr/local/sbin/etr-apply`) | root | the nginx include file, `/var/lib/etr-apply` | Rejects the staged file unless every line is an `<ip-or-cidr> <label>;` entry in one `geo` block, then installs it, runs `nginx -t`, reloads nginx and restores the previous file on failure |
-| `etr-update.timer` → `etr-update.service` | `etr` | `/opt/etr/bin` | Installs signed `v3.X.Y` releases of the daemon. Never touches `etr-apply` |
+| `etr-check-update.timer` → `etr-check-update.service` | `etr` | Notification state in `/var/lib/etr` | Checks signed release metadata daily; logs availability and optionally notifies. Never installs software |
+| `etr-update.timer` → `etr-update.service` (opt-in) | `etr` | `/opt/etr/bin` | Installs signed `v3.X.Y` releases of the daemon. Never touches `etr-apply` |
 
 The updater cannot replace the root apply helper, its systemd unit, or root
 configuration. The helper accepts data in a strict IP/CIDR-and-label grammar,
@@ -48,7 +49,7 @@ As root (nginx is required for `systemd` and `cron` modes):
 REPO=madebymode/docker-emerging-threats-rule-generator
 curl -fsSL -o /tmp/etr-install.sh "https://raw.githubusercontent.com/$REPO/master/deploy/install.sh"
 less /tmp/etr-install.sh          # read it: it runs as root
-bash /tmp/etr-install.sh          # or: --tag v3.X.Y, --nginx serverpilot, --no-auto-update
+bash /tmp/etr-install.sh          # check-only software updates; optional: --tag v3.X.Y, --nginx serverpilot
 ```
 
 ### Choose who applies the blocklist
@@ -59,11 +60,12 @@ bash /tmp/etr-install.sh          # or: --tag v3.X.Y, --nginx serverpilot, --no-
 | `--apply-mode cron` | Stages the list without waiting for root | Installs the fixed helper/unit; no watcher or cron job. You schedule root application yourself |
 | `--apply-mode generator` | Stages the list without waiting for root | No root helper, apply unit, watcher, or cron job is installed; nginx is not required |
 
-Every mode installs the generator and its unprivileged self-update unit.
-Use `--no-auto-update` to leave the updater timer disabled and perform updates
-only after review. Reinstalling preserves a disabled timer; `--auto-update`
-explicitly enables it again. The bootstrap installer still needs root to create the
-system user, ownership, and units; normal generation never runs as root.
+Every mode installs the generator, a daily release checker, and a disabled
+self-update unit/timer. Software installation requires explicit `--auto-update`.
+`--no-auto-update` revokes that choice; `--no-update-check` disables release
+checks too. Threat-feed refreshes remain automatic in all modes. The bootstrap
+installer still needs root to create the system user, ownership, and units;
+normal generation and release checking never run as root.
 
 For an operator-owned root cron schedule, install:
 
@@ -349,52 +351,91 @@ matters.
 
 ---
 
-## 6. Automatic updates
+## 6. Software release checks and opt-in updates
 
-On a fresh install, `install.sh` enables `etr-update.timer` unless you pass
-`--no-auto-update`. On reinstall it preserves an existing disabled timer;
-`--auto-update` explicitly re-enables it.
-It checks once a day at a random time per host and installs the newest signed
-`v3.MINOR.PATCH` release; timestamped `master` builds and v2 releases are
-ignored. Each update:
+By default, `etr-check-update.timer` checks daily with up to 12 hours of jitter.
+The checker runs as `etr` under the daemon's confinement, with no permission to
+write executable files. It downloads only the release index, manifest and
+signature, verifies the manifest using embedded trusted keys, and logs the
+installed version, available version, signed publication date and release URL.
+It does not download binaries, re-execute the daemon, or reload nginx.
 
-1. checks the release manifest's Ed25519 signature against the keys compiled
-   into the running binary, and refuses unsigned or re-signed releases;
-2. never installs an older version than the one running;
-3. waits until the release is `ETR_UPDATE_DELAY_HOURS` old (default 72), so a
-   bad release can be pulled before hosts install it;
-4. checks the binary's SHA-256 against the signed manifest, and that it runs
-   and reports the expected version;
-5. swaps it in atomically (the old one stays as
-   `/opt/etr/bin/etr-linux.prev`) and sends the daemon SIGHUP. The daemon
-   re-executes the new binary in place, keeping its PID. If it does not come
-   back up on the new binary, the update rolls back.
+```bash
+systemctl start etr-check-update.service       # check now
+journalctl -u etr-check-update --no-pager
+```
 
-The updater runs as `etr`, so it cannot restart units and never replaces
-`etr-apply`. Updates to `etr-apply`, the units or the policies arrive by
-rerunning `install.sh`; release notes say when that is needed.
+To send alerts through the notification channels already configured in
+`/etc/etr/etr.env`, add:
 
-| Variable (`etr.env`) | Default | Effect |
+```ini
+ETR_UPDATE_NOTIFY=true
+ETR_UPDATE_REMINDER_HOURS=168
+```
+
+Alerts are off by default. Each successfully notified channel is remembered in
+`/var/lib/etr/update-notices.json`, and receives a reminder after 168 hours
+(one week) by default. A changed installed or available version resets the
+notice. Failed channels retry on the next check without resending successful
+channels. Release checks are logged every run, even when an alert is suppressed.
+If state is corrupt, fix or remove that file to resume notifications; removing
+it allows another alert. State contains versions, channel names and timestamps,
+not credentials. A checker service run is limited to five minutes so a stalled
+notification backend cannot run indefinitely.
+
+The checker reports the newest stable `v3.MINOR.PATCH` release regardless of an
+installation pin or waiting period. Drafts, prereleases and timestamped builds
+are excluded. A failed fetch or signature check fails the service and logs an
+error; it never reports success or sends an availability alert for that release.
+
+### Opt into installation
+
+Rerun the reviewed installer with `--auto-update` to record explicit consent
+and enable `etr-update.timer`. It installs the newest signed release after the
+configured waiting period, verifies its digest, keeps the previous executable,
+asks the daemon to re-execute, and rolls back if the daemon fails its health
+check. The root helper, policies and units are updated only by the installer.
+
+```bash
+bash /tmp/etr-install.sh --auto-update
+# To revoke consent while retaining release checks:
+bash /tmp/etr-install.sh --no-auto-update
+```
+
+The choice is recorded in root-owned `/etc/etr/update-policy.env`, loaded after
+`etr.env` by the updater service. A legacy `ETR_AUTO_UPDATE=true` in `etr.env`
+cannot override it. Direct `--self-update` invocations as `etr` also require
+`ETR_AUTO_UPDATE=true`; invoking the binary as root is always refused.
+
+| Setting | Default | Effect |
 |---|---|---|
-| `ETR_AUTO_UPDATE` | `true` | `false` turns updates off |
-| `ETR_UPDATE_PIN` | — | Install exactly this tag (e.g. `v3.2.0`), including a downgrade. Skips the waiting period. |
-| `ETR_UPDATE_DELAY_HOURS` | `72` | Minimum release age before install (0–720) |
+| `ETR_AUTO_UPDATE` (installer-managed for the service) | `false` | Only exact `true` permits software installation |
+| `ETR_UPDATE_NOTIFY` (`etr.env`) | `false` | Exact `true` sends availability notices through configured channels |
+| `ETR_UPDATE_REMINDER_HOURS` (`etr.env`) | `168` | Repeat successful notices after this interval (1–8760 hours) |
+| `ETR_UPDATE_PIN` (`etr.env`) | — | Install this tag, including a downgrade; skips the waiting period; does not enable installation |
+| `ETR_UPDATE_DELAY_HOURS` (`etr.env`) | `72` | Minimum release age before automatic installation (0–720 hours) |
 
-Check with `journalctl -u etr-update`, or update now with
-`systemctl start etr-update`.
+### Existing installations
 
-For administrator-controlled production changes, use `--no-auto-update` and
-review releases before installing them. This disables software updates, not
-scheduled threat-feed refreshes. There is currently no notification-only
-release checker: disabling the updater does not send update-available alerts.
-Signed APT/DNF packaging and a notification-only checker are recommendations
-in [the project review](security-review.md), not implemented install options.
+Rerunning this installer converts legacy enabled update timers to check-only
+unless `--auto-update` is supplied. An old enabled timer is not treated as
+explicit consent. Subsequent reruns preserve the recorded opt-in while the
+timer remains enabled, and respect manually disabled timers. This migration
+requires a new signed deployment bundle; daemon self-update alone cannot
+install the checker units or migrate the timer configuration.
+
+To stop only release checks, use `--no-update-check` or
+`systemctl disable --now etr-check-update.timer`. Reruns preserve that disabled
+state. Re-enable with `systemctl enable --now etr-check-update.timer`.
+These software policies do not change scheduled threat-feed refreshes.
+APT/DNF packages remain planned; they are not implemented install options.
 
 ## Uninstall
 
 ```bash
-systemctl disable --now etr etr-apply.path etr-update.timer
-rm /etc/systemd/system/etr{,-update,-apply}.service /etc/systemd/system/etr-update.timer \
+systemctl disable --now etr etr-apply.path etr-update.timer etr-check-update.timer
+systemctl stop etr-update.service etr-check-update.service
+rm /etc/systemd/system/etr{,-update,-apply,-check-update}.service /etc/systemd/system/etr{,-check}-update.timer \
    /etc/systemd/system/etr-apply.path /usr/local/sbin/etr-apply
 rm -r /opt/etr /var/lib/etr /var/lib/etr-apply
 # If you created an operator-owned cron job, remove it separately.

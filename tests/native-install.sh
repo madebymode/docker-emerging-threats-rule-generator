@@ -44,7 +44,13 @@ printf 'systemctl %s\n' "$*" >> "$ETR_INSTALL_TEST_ROOT/commands"
 if [[ $1 == cat ]]; then
   [[ $2 == nginx-sp.service || -f /etc/systemd/system/$2 ]]
 elif [[ $1 == is-enabled ]]; then
-  [[ -f $ETR_INSTALL_TEST_ROOT/updater-enabled ]]
+  [[ -f $ETR_INSTALL_TEST_ROOT/enabled-${!#} ]]
+elif [[ $1 == enable || $1 == disable ]]; then
+  for unit in "$@"; do
+    if [[ $unit == *.timer ]]; then
+      if [[ $1 == enable ]]; then touch "$ETR_INSTALL_TEST_ROOT/enabled-$unit"; else rm -f "$ETR_INSTALL_TEST_ROOT/enabled-$unit"; fi
+    fi
+  done
 elif [[ $1 == show ]]; then
   if [[ -f $ETR_INSTALL_TEST_ROOT/apply-pending ]]; then echo activating; else echo inactive; fi
 elif [[ $1 == start && $2 == etr-apply.service ]]; then
@@ -120,8 +126,8 @@ assert_retired() {
   if grep -q '^AppArmorProfile=' /etc/systemd/system/etr-apply.service; then exit 1; fi
 }
 
-# Fresh install detects ServerPilot and retains daemon/updater confinement.
-run_install
+# Fresh install checks releases but does not opt in to software installation.
+bash "$test_root/deploy/install.sh" --from "$test_root/dist"
 assert_retired
 assert grep -qx 'NGINX_BIN=nginx-sp' /etc/etr/apply.env
 assert grep -qx 'User=etr' /etc/systemd/system/etr.service
@@ -133,7 +139,42 @@ assert grep -q 'CAP_NET_BIND_SERVICE' /etc/systemd/system/etr-apply.service
 : > "$test_root/commands"
 bash "$test_root/deploy/install.sh" --from "$test_root/dist"
 if grep -q 'systemctl enable --now etr-update.timer' "$test_root/commands"; then exit 1; fi
-echo 'PASS fresh install and disabled updater preservation' 
+assert grep -qx 'ETR_AUTO_UPDATE=false' /etc/etr/update-policy.env
+assert test -f "$test_root/enabled-etr-check-update.timer"
+assert test ! -f "$test_root/enabled-etr-update.timer"
+assert grep -qx 'User=etr' /etc/systemd/system/etr-check-update.service
+assert grep -qx 'AppArmorProfile=-etr-daemon' /etc/systemd/system/etr-check-update.service
+assert grep -qx 'ProtectSystem=strict' /etc/systemd/system/etr-check-update.service
+assert runuser -u etr -- test ! -w /etc/etr/update-policy.env
+systemd-analyze verify "$repo/deploy/systemd/etr-check-update.service" "$repo/deploy/systemd/etr-check-update.timer"
+echo 'PASS fresh install defaults to metadata checks'
+
+# A legacy enabled timer and etr.env do not constitute recorded consent.
+rm /etc/etr/update-policy.env
+touch "$test_root/enabled-etr-update.timer"
+echo ETR_AUTO_UPDATE=true >> /etc/etr/etr.env
+bash "$test_root/deploy/install.sh" --from "$test_root/dist"
+assert grep -qx 'ETR_AUTO_UPDATE=false' /etc/etr/update-policy.env
+assert test ! -f "$test_root/enabled-etr-update.timer"
+assert grep -qx 'ETR_AUTO_UPDATE=true' /etc/etr/etr.env
+# Explicit consent survives a rerun; explicitly disabling a timer is respected.
+bash "$test_root/deploy/install.sh" --from "$test_root/dist" --auto-update
+assert grep -qx 'ETR_AUTO_UPDATE=true' /etc/etr/update-policy.env
+assert test -f "$test_root/enabled-etr-update.timer"
+bash "$test_root/deploy/install.sh" --from "$test_root/dist"
+assert grep -qx 'ETR_AUTO_UPDATE=true' /etc/etr/update-policy.env
+systemctl disable --now etr-update.timer
+bash "$test_root/deploy/install.sh" --from "$test_root/dist"
+assert grep -qx 'ETR_AUTO_UPDATE=false' /etc/etr/update-policy.env
+bash "$test_root/deploy/install.sh" --from "$test_root/dist" --auto-update
+run_install --no-update-check
+assert grep -qx 'ETR_AUTO_UPDATE=false' /etc/etr/update-policy.env
+assert test ! -f "$test_root/enabled-etr-update.timer"
+assert test ! -f "$test_root/enabled-etr-check-update.timer"
+bash "$test_root/deploy/install.sh" --from "$test_root/dist"
+assert test ! -f "$test_root/enabled-etr-check-update.timer"
+systemctl enable --now etr-check-update.timer
+echo 'PASS legacy migration, explicit opt-in, revocation and disabled checks'
 
 # Upgrade the exact patched-test-box layout, preserving configuration, staged
 # and live lists, and unrelated drop-ins. The mocked services do not run ETR.
@@ -261,7 +302,7 @@ echo 'PASS unload failure stops migration'
 printf '\nAppArmorProfile=-etr-apply\n' >> "$test_root/deploy/systemd/etr-apply.service"
 : > "$test_root/commands"
 if run_install; then exit 1; fi
-assert test ! -s "$test_root/commands"
+if grep -qE 'systemctl (stop|start|enable|disable|restart|daemon-reload) ' "$test_root/commands"; then exit 1; fi
 echo 'PASS old deployment bundle rejected before mutation'
 
 # A downloaded release must never fall back to untrusted checksums when the
@@ -281,6 +322,6 @@ chmod +x "$test_root/bin/curl" "$test_root/bin/openssl"
 : > "$test_root/commands"
 if bash "$test_root/deploy/install.sh" --tag v3.99.0 --no-auto-update > "$test_root/unsigned.log" 2>&1; then exit 1; fi
 assert grep -q 'refusing to install without verifying the release signature' "$test_root/unsigned.log"
-assert test ! -s "$test_root/commands"
+if grep -qE 'systemctl (stop|start|enable|disable|restart|daemon-reload) ' "$test_root/commands"; then exit 1; fi
 echo 'PASS unverified release rejected before mutation'
 echo 'All native installer checks passed.'
