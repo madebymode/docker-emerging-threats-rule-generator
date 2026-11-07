@@ -22,7 +22,7 @@ RUN apk add --no-cache tzdata \
     && echo "etr-updater:x:987:" > /rootfs/etc/group \
     && chown -R 1000:987 /app-skel
 
-# No OS packages at runtime: nothing for base-image CVE scanners to flag.
+# Minimal runtime: the Go binary, trust store, timezone data and user records.
 FROM scratch
 
 COPY --from=build /rootfs/ /

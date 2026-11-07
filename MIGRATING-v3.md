@@ -1,5 +1,7 @@
 # Migrating to ETR v3
 
+[Documentation index](readme.md) · [Contributing](CONTRIBUTING.md)
+
 ETR v3 keeps daily updates, IPv4/IPv6 lists, whitelist exclusions, source labels,
 Docker container restarts, and Telegram/SMTP/webhook notifications. Configuration
 keys and environment variable names are unchanged. The major version makes the
@@ -74,31 +76,15 @@ using their module versions, not Docker Engine release tags such as
 The client negotiates the daemon API version automatically unless
 `DOCKER_API_VERSION` is set.
 
-Builds require Go 1.27.3. CI reads the version from `go.mod`; the Docker builder
-uses the same version. The Dockerfile tracks the latest stable Dockerfile v1
-frontend and caches downloaded modules and compiled packages with BuildKit. The
-binary is built without CGO. Build contexts include only source and build inputs,
-excluding local configuration, credentials, and Git history. Runtime Alpine
-packages are upgraded during image construction;
-use `docker build --pull --no-cache` when rebuilding for newly published package
-fixes so an old package-install layer is not reused.
+The required Go version is declared in [go.mod](go.mod); keep the Docker
+builder aligned with it. The generator runtime is `scratch`, assembled with
+its executable, trust store, timezone data and user records. It has no shell
+or package manager. The optional log-manager is a separate Alpine image.
 
-GitHub Actions were updated to their latest published releases on 2026-10-24 and
-pinned to commit hashes:
-
-| Action | Release |
-| --- | --- |
-| actions/checkout | [v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) |
-| actions/setup-go | [v7.0.0](https://github.com/actions/setup-go/releases/tag/v7.0.0) |
-| docker/login-action | [v4.7.0](https://github.com/docker/login-action/releases/tag/v4.7.0) |
-| docker/metadata-action | [v6.2.0](https://github.com/docker/metadata-action/releases/tag/v6.2.0) |
-| docker/setup-qemu-action | [v4.4.0](https://github.com/docker/setup-qemu-action/releases/tag/v4.4.0) |
-| docker/setup-buildx-action | [v4.4.1](https://github.com/docker/setup-buildx-action/releases/tag/v4.4.1) |
-| docker/build-push-action | [v7.4.0](https://github.com/docker/build-push-action/releases/tag/v7.4.0) |
-| ncipollo/release-action | [v1.21.0](https://github.com/ncipollo/release-action/releases/tag/v1.21.0) |
-
-The workflows use GitHub-hosted `ubuntu-latest` runners. Keep any replacement
-self-hosted runners compatible with these Actions' Node runtimes.
+CI checks both native and Docker variants through the same Make targets used
+locally. Action revisions are pinned in the [workflows](.github/workflows/),
+which are the source of truth for their versions. See
+[Contributing](CONTRIBUTING.md) for builds, race checks and integration tests.
 
 ## Remaining trust boundaries
 
@@ -121,11 +107,9 @@ and [Go directory-scoped filesystem operations](https://pkg.go.dev/os#Root).
 ## Validation
 
 ```sh
-go test ./...
-go test -race -short ./...
-go vet ./...
-docker build --pull -t etr:hardening-test .
-sh tests/docker-smoke.sh etr:hardening-test
+make check race
+make docker-smoke IMAGE=etr:hardening-test
+# Optional additional dependency/image scanning:
 docker scout cves etr:hardening-test
 ```
 

@@ -1,627 +1,117 @@
-# Emerging Threat Rules for Nginx
+# Emerging Threats Rule Generator (ETR)
 
-Pulls daily-refreshed threat intelligence IP lists and generates a `blocklist.conf` for nginx. Wire it as a Traefik `forwardAuth` gate — every inbound request hits nginx's `/check_ip` first. Blocked IPs and headless bots get a `403` before they reach your app.
+ETR downloads IP threat feeds, applies whitelist exclusions, and generates an
+nginx `geo` blocklist. Run it natively on a Linux host or alongside nginx in
+Docker. The nginx configuration decides which requests to reject.
 
-Docker Hub: https://hub.docker.com/r/mxmd/etr
+Threat feeds refresh automatically. Native software updates are opt-in;
+the default release checker logs available signed versions without installing
+them. Docker software updates are managed by replacing the image.
 
-ETR v3 hardens the container and input handling and uses Go 1.27. Before upgrading from v2, read the [v3 migration notes](MIGRATING-v3.md).
+## Start here
 
----
+| I want to… | Read |
+| --- | --- |
+| Install on Ubuntu, ServerPilot, or RHEL | [Native installation](native-install.md) |
+| Run nginx and ETR in Docker | [Docker setup](docs/docker.md) |
+| Choose feeds, exemptions, scheduling, or notifications | [Configuration reference](docs/configuration.md) |
+| Understand enforcement and forwarded client IPs | [nginx integration](docs/nginx.md) |
+| Verify blocking on a test deployment | [Manual testing](testing.md) |
+| Query blocked-request logs | [Log reporting](reporting.md) |
+| Upgrade from v2 | [Migration guide](MIGRATING-v3.md) |
+| Change code or run checks | [Contributing](CONTRIBUTING.md) |
+| Find the implementation of a feature | [Architecture and source map](docs/architecture.md) |
+| Publish a release | [Release procedure](releasing.md) |
+| Review known security boundaries | [Security review](security-review.md) |
 
-## How It Works
+## How it works
 
-**Allowed — 200 OK**
-
-```
-                    ┌────────────────────────────────┐
-                    │  etr (daily cron)              │
-                    │  IP lists → blocklist.conf     │
-                    └───────────────┬────────────────┘
-                                    │ shared volume
-                                    ▼
- Client           Traefik        nginx /check_ip        app
-   │                 │                  │                 │
-   ├── request ─────►│                  │                 │
-   │                 ├── forwardAuth ──►│                 │
-   │                 │◄─── 200 OK ──────┤                 │
-   │                 ├──────────────────────── forward ──►│
-   │                 │◄─────────────────────── response ──┤
-   │◄── response ────┤                  │                 │
-```
-
-**Blocked — 403**
-
-```
- Client           Traefik        nginx /check_ip
-   │                 │                  │
-   ├── request ─────►│                  │
-   │                 ├── forwardAuth ──►│
-   │                 │◄─── 403 ─────────┤  ← blocked IP or empty User-Agent
-   │◄── 403 ─────────┤                  │
+```mermaid
+flowchart LR
+    feeds[Threat feeds and local configuration] --> generator[Unprivileged ETR generator]
+    generator --> rules[Generated IP rules]
+    rules --> apply[Deployment-specific application and reload]
+    apply --> nginx[nginx enforcement]
+    client[Client request] --> nginx
+    nginx --> allowed[Allowed request]
+    nginx --> blocked[403 and block log]
 ```
 
-1. `emerging-threats-rules` fetches the configured IP/CIDR lists once a day, merges and de-duplicates them, sorts them in ascending order, and writes `blocklist.conf` to a shared Docker volume.
-2. Nginx loads that file on startup and holds the blocklist as an in-memory radix tree. **`nginx/default.conf` must also be mounted** — it defines the `$blocked_source` variable, the `/check_ip` endpoint, and the real-IP unwrapping that makes the geo lookup operate on the actual client IP. Without it, `blocklist.conf` is present but never used.
-3. Traefik's `forwardAuth` middleware sends every request to nginx `/check_ip` before routing upstream. Blocked IPs and empty User-Agents return `403`; everything else returns `200` and traffic continues normally.
-
----
-
-## Why `ngx_http_geo_module` (Not `allow`/`deny`)
-
-The `geo` module is why this works at scale without adding meaningful latency.
-
-| Approach | Per-request cost | 100k-entry list |
-|---|---|---|
-| `allow` / `deny` directives | O(n) — linear scan | 100,000 comparisons per request |
-| `ngx_http_geo_module` | O(32) — radix tree | 32 pointer-follows, always |
-
-Nginx builds a **32-bit radix tree** (binary trie) from `blocklist.conf` at startup. Looking up any IPv4 address walks at most 32 nodes — one per IP address bit. The lookup cost is constant regardless of list size. A 100,000-entry blocklist costs the same to query as a 10-entry one.
-
-The official nginx docs confirm this:
-
-> "Since variables are evaluated only when used, the mere existence of even a large number of declared 'geo' variables does not cause any extra costs for request processing."
-
-**Memory:** each trie node is 32 bytes on a 64-bit system. Worst case (100k `/32` entries with no shared prefixes) is ~100 MB. Real-world threat lists share large prefix ranges, so actual usage is typically a few MB.
-
-**The one meaningful cost is reload, not lookup.** When `emerging-threats-rules` restarts nginx with a refreshed list, the trie rebuilds from text — but this happens once a day. This project writes entries in ascending order (as the nginx docs recommend) to keep that rebuild fast.
-
-The `forwardAuth` hop itself is a loopback call to a local container doing a pure in-memory lookup. Added latency per request is sub-millisecond.
-
----
-
-## Quick Start
-
-Official images are published to Docker Hub for **amd64 and arm64** — no repo clone required.
-
-```bash
-docker pull mxmd/etr:v3
-```
-
-### 1. Create `config.json`
-
-Copy `config.example.json` from the repo or create it from scratch. At minimum, set `nginx_container_names` to match what Docker will name your nginx container — the service name from your compose file:
-
-```json
-{
-  "nginx_container_names": ["nginx-blacklist"],
-  "remote_blocklists": [
-    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/6.txt",
-    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/5.txt",
-    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/4.txt",
-    "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt",
-    "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
-  ],
-  "nginx_conf_file_path": "/app/nginx/conf/blocklist.conf"
-}
-```
-
-The ipsum levels are tiered by threat confidence (8 = highest, 4 = moderate). Start with levels 4–6 for broad coverage; tighten to 6–8 if you see false positives.
-
-### 2. Get `nginx/default.conf`
-
-This file is **required** — it defines the `/check_ip` endpoint, the `$blocked_source` variable used by the blocklist, and real-IP unwrapping. A plain nginx container pointed at the shared volume will not block anything without it.
-
-Download it from the repo:
-
-```bash
-mkdir -p nginx
-curl -o nginx/default.conf \
-  https://raw.githubusercontent.com/mxmd/emerging-threats-rules/master/nginx/default.conf
-```
-
-Then mount it in your compose file alongside the shared volume (both land in `/etc/nginx/conf.d/`):
-
-```yaml
-volumes:
-  - nginx-blocking-rules:/etc/nginx/conf.d/:ro
-  - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-```
-
-See [Nginx Configuration](#nginx-configuration-nginxdefaultconf) for a full breakdown of what the file does and how to adjust it for your network topology.
-
-### 3. Find your host's Docker group ID
-
-The rule generator needs the Docker socket to restart nginx after each daily refresh:
-
-```bash
-grep docker /etc/group | cut -d: -f3
-# e.g. 1003
-```
-
-Set `group_add` in `docker-compose.yml` to that GID. The container runs entirely as the unprivileged `etr-updater` user (uid 1000) — no root, no crond, no privilege dropping. `group_add` grants the container's user access to the mounted Docker socket.
-
-Access to a rootful Docker socket grants host-level authority despite the
-container's nonroot UID and dropped capabilities. For deployments requiring
-privilege separation, set `RESTART_CONTAINERS=false`, remove the socket mount
-and its `group_add`, and use an administrator-controlled apply/reload workflow.
-The [native install](native-install.md) provides a separate root validator.
-See the [project security review](security-review.md) for remaining boundaries.
-
-### 4. Bring it up
-
-```bash
-# Fetch the blocklists and write blocklist.conf (runs once, then exits)
-docker compose up emerging-threats-rules
-
-# Start nginx with the generated blocklist
-docker compose up -d nginx-blacklist
-```
-
-The cron job inside `emerging-threats-rules` refreshes the blocklist and restarts nginx automatically every day.
-
-### 5. Verify it's working
-
-```bash
-# Allowed request — expect 200
-docker exec -it nginx-blacklist wget -S -O /dev/null http://localhost:8080/check_ip
-
-# Empty User-Agent — always blocked, expect 403
-docker exec -it nginx-blacklist wget -S -O /dev/null -U "" http://localhost:8080/check_ip
-```
-
-Watch live blocks:
-
-```bash
-docker logs -f nginx-blacklist
-```
-
-See [testing.md](testing.md) for how to spoof specific IPs against the live blocklist.
-
----
-
-## Configuration (`config.json`)
-
-| Field | Description |
-|---|---|
-| `nginx_container_names` | Container names to restart after updating. Must match Docker's runtime name (the service name from compose). |
-| `remote_blocklists` | URLs to fetch for blocking. One IP or CIDR per line; `#` comments are ignored. Each URL becomes a source label in logs (e.g. `ipsum-6`, `compromised-ips`). |
-| `local_blocklist` | Static IPs/CIDRs to always block, defined inline in the config. |
-| `local_whitelist` | Static IPs/CIDRs to never block, defined inline in the config. Takes precedence over all blocklists. |
-| `remote_whitelists` | URLs to fetch for whitelisting. Same format as `remote_blocklists`. |
-| `nginx_conf_file_path` | Where to write `blocklist.conf` inside the container. Must match the shared volume mount. |
-
-Full default config for reference:
-
-```json
-{
-  "nginx_container_names": [
-    "nginx-blacklist-1"
-  ],
-  "remote_blocklists": [
-    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/8.txt",
-    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/7.txt",
-    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/6.txt",
-    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/5.txt",
-    "https://raw.githubusercontent.com/stamparm/ipsum/refs/heads/master/levels/4.txt",
-    "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt",
-    "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
-  ],
-  "local_whitelist": [],
-  "local_blocklist": [],
-  "remote_whitelists": [],
-  "nginx_conf_file_path": "/app/nginx/conf/blocklist.conf"
-}
-```
-
----
-
-## Whitelisting
-
-Whitelisted IPs and CIDRs are **always allowed**, regardless of what any blocklist says. Use this to protect known-good addresses — monitoring infrastructure, CDN egress ranges, internal scanners — from being accidentally blocked.
-
-### How it works: CIDR splitting
-
-The naive approach to whitelisting is to skip a blocked entry entirely when it overlaps a whitelist entry. That would un-block an entire CIDR range just to protect a handful of IPs inside it.
-
-Instead, this project uses **CIDR splitting**: when a whitelist entry is a subset of a blocked CIDR, the app carves the whitelisted addresses out of the blocked range and emits the minimal set of smaller CIDRs that cover exactly the blocked portion.
-
-Example — blocklist contains `198.51.100.0/24`, whitelist contains `198.51.100.5`:
-
-```
-Blocked:    198.51.100.0/24   (256 addresses)
-Whitelisted: 198.51.100.5
-
-Result written to blocklist.conf:
-    198.51.100.0/30     # .0–.3   blocked
-    198.51.100.4/32     # .4      blocked
-    # .5 omitted — whitelisted
-    198.51.100.6/31     # .6–.7   blocked
-    198.51.100.8/29     # .8–.15  blocked
-    ... (minimal CIDR cover continues through .255)
-```
-
-The log line for a split will tell you exactly what happened:
-
-```
-Splitting blocklist CIDR 198.51.100.0/24 (from compromised-ips): retaining 8 sub-ranges after whitelist exclusions
-```
-
-If an entry is fully covered by the whitelist, it is dropped entirely with a log message:
-
-```
-Skipping whitelisted IP: 1.2.3.4 (matched: 1.2.3.0/24 from local_whitelist) - found in blocklist: ipsum-6
-```
-
-### Configuration
-
-```json
-{
-  "nginx_container_names": ["nginx-blacklist"],
-  "remote_blocklists": [
-    "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
-  ],
-  "local_whitelist": [
-    "1.2.3.4",
-    "203.0.113.0/28"
-  ],
-  "remote_whitelists": [
-    "https://example.com/my-cdn-egress-ips.txt"
-  ],
-  "nginx_conf_file_path": "/app/nginx/conf/blocklist.conf"
-}
-```
-
-Whitelist sources are processed in this order of precedence (all equal — any match wins):
-
-| Source | Field | Use case |
-|---|---|---|
-| Inline IPs/CIDRs | `local_whitelist` | A handful of known-good IPs you manage directly |
-| Remote list | `remote_whitelists` | CDN egress ranges, monitoring vendor IPs, etc. |
-
----
-
-## Notifications
-
-The app can alert you via Telegram, email (SMTP/STARTTLS), or a generic webhook when something goes wrong. Two events trigger a notification:
-
-1. **Blocklist update abandoned** — when the percentage of failed remote blocklist downloads reaches `BLOCKLIST_FAILURE_THRESHOLD` (default 30%). The existing `blocklist.conf` is preserved rather than overwriting it with incomplete data.
-2. **Nginx restart failed** — when a configured container cannot be restarted after a blocklist update.
-
-Configure one or more channels via environment variables (see the table below). Channels are independent — set whichever you need; partially configured channels (e.g. a Telegram token with no chat ID) are skipped with a warning rather than failing.
-
-```yaml
-environment:
-  - INSTANCE_NAME=prod-eu          # optional label in alert subject
-  - TELEGRAM_BOT_TOKEN=123:abc
-  - TELEGRAM_CHAT_ID=-1001234567890
-  # or SMTP / WEBHOOK_URL instead
-```
-
----
-
-## Environment Variables
-
-### General
-
-| Variable | Default | Description |
-|---|---|---|
-| `ETR_DAEMON` | `false` | When `true`, the binary self-schedules updates in-process instead of running once and exiting. Set in `docker-compose.yml` or the systemd unit. Ignored when `--force` is passed. |
-| `ETR_AT_HOUR` | `3` | Daemon mode only. Local-time hour (0–23) to run the daily update. Choose a low-traffic hour for the audience you protect. |
-| `ETR_JITTER_MINUTES` | `60` | Daemon mode only. Random delay window (0–240) added to `ETR_AT_HOUR` to spread load across deployments pulling from the same upstream blocklist sources. |
-| `ETR_RUN_ON_START` | `true` | Daemon mode only. When `false`, defers the first update to the next scheduled window. Ignored if the blocklist file does not yet exist — the daemon always builds an initial list on cold start. |
-| `RESTART_CONTAINERS` | `true` | When `false`, skips all Docker socket access — only writes `blocklist.conf` and exits. Omit the `docker.sock` volume mount entirely in this mode. Use your orchestrator's reload hook to apply the updated file. |
-| `BLOCKLIST_FAILURE_THRESHOLD` | `30` | Percentage of remote blocklist sources that must fail before the update is abandoned and the existing blocklist preserved. Set to `0` to always write even on partial failures; `100` to never abort early. |
-| `INSTANCE_NAME` | _(unset)_ | Optional label added to notification subjects — e.g. `[ETR prod-eu]`. Useful when running multiple deployments. |
-
-### Notifications
-
-Alerts fire when: (1) enough remote blocklist sources fail that the threshold is exceeded and the update is abandoned, or (2) a configured nginx container fails to restart.
-
-**Telegram**
-
-| Variable | Default | Description |
-|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | _(unset)_ | Bot token from @BotFather. Both token and chat ID must be set to enable Telegram. |
-| `TELEGRAM_CHAT_ID` | _(unset)_ | Target chat or channel ID. |
-
-**Email (SMTP / STARTTLS)**
-
-| Variable | Default | Description |
-|---|---|---|
-| `SMTP_HOST` | _(unset)_ | SMTP server hostname. All three of host, from, and to must be set to enable email. |
-| `SMTP_PORT` | `587` | SMTP port (STARTTLS). |
-| `SMTP_FROM` | _(unset)_ | Sender address. |
-| `SMTP_TO` | _(unset)_ | Comma-separated list of recipient addresses. |
-| `SMTP_USER` | _(unset)_ | SMTP username — omit for unauthenticated relay. |
-| `SMTP_PASS` | _(unset)_ | SMTP password. |
-
-**Slack (bot)**
-
-| Variable | Default | Description |
-|---|---|---|
-| `SLACK_BOT_TOKEN` | _(unset)_ | Bot User OAuth token (starts with `xoxb-`). Requires the `chat:write` scope. Invite the bot to the target channel. |
-| `SLACK_CHANNEL_ID` | _(unset)_ | Channel ID (e.g. `C0123ABC456`) — use the channel ID, not the `#name`. Find it in Slack via *View channel details → About → (bottom)*. |
-
-**Webhook**
-
-| Variable | Default | Description |
-|---|---|---|
-| `WEBHOOK_URL` | _(unset)_ | URL to POST `{"subject":"…","body":"…"}` (JSON) on notable events. |
-
-**Standard Webhooks (signed)**
-
-Signs each POST per the [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks) spec — receivers verify with `webhook-id`, `webhook-timestamp`, and `webhook-signature: v1,<base64>` headers over the canonical string `<msg_id>.<timestamp>.<raw_body>`.
-
-| Variable | Default | Description |
-|---|---|---|
-| `STANDARD_WEBHOOK_URL` | _(unset)_ | Destination URL. Both URL and SECRET must be set to enable. |
-| `STANDARD_WEBHOOK_SECRET` | _(unset)_ | HMAC key. Accepts `whsec_<base64>` (per spec — decoded before use) or a bare string. |
-| `STANDARD_WEBHOOK_FROM` | `INSTANCE_NAME` → `ETR` | Value sent as `data.from` in the envelope. |
-| `STANDARD_WEBHOOK_EVENT_TYPE` | `slack.notification` | Envelope `type`. Receivers route on this; use whatever hierarchical identifier the receiver expects (e.g. `slack.notification`, `slack.alert`). |
-| `STANDARD_WEBHOOK_SLACK_CHANNEL_ID` | _(unset)_ | Optional per-sender Slack channel override. Preferred over the name — stable across renames. |
-| `STANDARD_WEBHOOK_SLACK_CHANNEL_NAME` | _(unset)_ | Optional Slack channel name override. Used only when the ID is unset. |
-
-Payload shape (envelope, camelCase fields):
-
-```json
-{
-  "type": "slack.notification",
-  "timestamp": "<RFC 3339>",
-  "data": {
-    "from": "<from>",
-    "body": "<body>",
-    "title": "<subject>",
-    "slackChannelId": "<optional>",
-    "slackChannelName": "<optional>"
-  }
-}
-```
-
-For interop with mode-iris: point `STANDARD_WEBHOOK_URL` at `https://<iris>/messaging/standard` and share the same secret.
-
----
-
-## Docker Compose
-
-### Minimal example
-
-The rule generator and nginx share a named volume for `blocklist.conf`. A separate `blocklist-logs` volume stores the rotated file log so nginx can keep its normal container stdout/stderr wiring intact.
-
-```yaml
-version: '3'
-
-services:
-  emerging-threats-rules:
-    image: mxmd/etr:v3
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    pids_limit: 128
-    group_add:
-      - "1003"                 # host docker GID: grep docker /etc/group | cut -d: -f3
-    volumes:
-      - ./config.json:/app/config.json:ro
-      - nginx-blocking-rules:/app/nginx/conf/
-      - /var/run/docker.sock:/var/run/docker.sock
-
-  nginx-blacklist:
-    image: nginx/nginx-unprivileged:alpine-slim
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,mode=1777
-    depends_on:
-      - emerging-threats-rules
-    volumes:
-      - nginx-blocking-rules:/etc/nginx/conf.d/:ro
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-      - blocklist-logs:/var/log/blocklist
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "7"
-
-  log-manager:
-    depends_on:
-      - nginx-blacklist
-    build: ./log-manager
-    restart: unless-stopped
-    volumes:
-      - blocklist-logs:/var/log/blocklist
-
-volumes:
-  nginx-blocking-rules:
-  blocklist-logs:
-```
-
-### Traefik integration
-
-Define the `forwardAuth` middleware in Traefik's labels, then apply it to any router.
-
-```yaml
-services:
-  traefik:
-    image: traefik:v2.11.0
-    command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    labels:
-      - "traefik.enable=true"
-      # Register the blocklist middleware — points at the nginx checker
-      - "traefik.http.middlewares.etr-blocklist.forwardauth.address=http://etr-blocker-nginx:8080/check_ip"
-    networks:
-      - traefik-public
-
-  etr-downloader:
-    image: mxmd/etr:v3
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    pids_limit: 128
-    restart: unless-stopped
-    group_add:
-      - "1003"                 # host docker GID: grep docker /etc/group | cut -d: -f3
-    volumes:
-      - ./etr/config.json:/app/config.json:ro
-      - nginx-blocking-rules:/app/nginx/conf/
-      - /var/run/docker.sock:/var/run/docker.sock
-
-  etr-blocker-nginx:
-    image: nginx/nginx-unprivileged:alpine-slim
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,mode=1777
-    restart: always
-    deploy:
-      replicas: 2
-    depends_on:
-      - etr-downloader
-    volumes:
-      - nginx-blocking-rules:/etc/nginx/conf.d/:ro
-      - ./etr/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-    networks:
-      - traefik-public
-
-volumes:
-  nginx-blocking-rules:
-```
-
-Apply the middleware to any service with a single label:
-
-```yaml
-labels:
-  - "traefik.http.routers.myapp.middlewares=etr-blocklist@docker"
-```
-
----
-
-## Nginx Configuration (`nginx/default.conf`)
-
-> **This file is required.** Without it, nginx has no `/check_ip` endpoint, no `$blocked_source` variable reference, and no real-IP unwrapping — `blocklist.conf` is loaded but never consulted. Every request passes through unchecked.
->
-> The docker-compose examples mount it explicitly to prevent the shared volume from overwriting it:
-> ```yaml
-> volumes:
->   - nginx-blocking-rules:/etc/nginx/conf.d/:ro        # blocklist.conf lands here
->   - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro  # must be mounted separately
-> ```
-> Do not skip this mount or replace it with a generic nginx config.
-
-The included `nginx/default.conf` and the generated `blocklist.conf` both land in `/etc/nginx/conf.d/` via the shared volume.
-
-| File | Source | Purpose |
-|---|---|---|
-| `blocklist.conf` | Generated daily by this app | Defines `geo $blocked_source {}` — the radix tree of every blocked IP/CIDR and its source label |
-| `default.conf` | Mounted from `./nginx/default.conf` | Reads `$blocked_source`, exposes `/check_ip`, configures logging |
-
-### `$blocked_source`
-
-For every blocked IP or CIDR, `$blocked_source` is set to a label identifying which list(s) it came from — e.g. `ipsum-6`, `compromised-ips`, or `ipsum-6+compromised-ips` when an IP appears in multiple lists. For all other IPs it is `""` (empty/falsy).
-
-### `/check_ip` block logic
-
-| Condition | Variable set | Response |
-|---|---|---|
-| Empty `User-Agent` header | `$blocked_ua = "empty-ua"` | 403 |
-| IP matched in blocklist | `$blocked_source = "<label>"` | 403 |
-| Neither | both empty | 200 OK |
-
-Empty UA is checked first. Only blocked requests (non-200) are written to the log.
-
-### Log format
-
-Logs are JSON for easy ingestion by Datadog or any structured log pipeline:
-
-```nginx
-log_format blocklist escape=json
-    '{"ip":"$remote_addr",'
-     '"time":"$time_iso8601",'
-     '"method":"$display_method",'
-     '"url":"$display_url",'
-     '"status":$status,'
-     '"blocked_source":"$blocked_source",'
-     '"blocked_ua":"$blocked_ua"}';
-```
-
-Example log line:
-
-```json
-{"ip":"1.2.3.4","time":"2026-03-14T14:44:54+00:00","method":"GET","url":"https://example.com/api/v1/secret","status":403,"blocked_source":"ipsum-4+ipsum-3+ipsum-2","blocked_ua":""}
-```
-
-`X-Forwarded-Method`, `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Uri` are used to reconstruct the real client-facing `method` and `url`. `blocked_source` is a `+`-joined label of every blocklist the IP appeared in.
-
-### Real IP trust
-
-```nginx
-real_ip_header      X-Forwarded-For;
-real_ip_recursive   on;
-set_real_ip_from    10.0.0.0/8;      # Docker host networking & overlay networks
-set_real_ip_from    172.16.0.0/12;   # Docker default bridge networks (172.16–172.31)
-set_real_ip_from    192.168.0.0/16;  # Docker custom bridge networks
-```
-
-When nginx sits behind Traefik (or another Docker-internal proxy), `$remote_addr` would be the proxy's container IP without this config. These three ranges cover all standard Docker networking modes so the geo lookup always operates on the real client IP.
-
-`real_ip_recursive on` handles chained proxies: nginx walks `X-Forwarded-For` right-to-left, skips addresses matching any `set_real_ip_from` range, and stops at the first untrusted address — the actual client.
-
-> **CPU note:** `real_ip_recursive on` scans the full `X-Forwarded-For` chain on every request. An attacker can send an arbitrarily long XFF header, forcing a linear scan before nginx resolves the real IP. Nginx's `large_client_header_buffers` bounds the worst case (default 8 KB / 4 buffers), but if you see elevated CPU on `etr-blocker-nginx` consider stripping or truncating `X-Forwarded-For` at the Traefik layer before the forwardAuth hop.
-
-Adjust `set_real_ip_from` ranges to match your network topology.
-
-### Traefik-side hardening (strongly recommended)
-
-`real_ip_recursive on` stops a client from forging a trusted IP — but only if Traefik itself hasn't been fooled first. A client can inject an `X-Forwarded-For` header with a spoofed IP before it reaches Traefik; if Traefik passes that header through unchanged, nginx will peel it off as the "real" client IP and the blocklist lookup will be against a forged address.
-
-Lock this down in your Traefik static config:
-
-```yaml
-# traefik.yml
-entryPoints:
-  web:
-    forwardedHeaders:
-      trustedIPs:
-        - "127.0.0.1/32"
-        - "10.0.0.0/8"       # upstream CDN or load-balancer
-        - "172.16.0.0/12"    # Docker bridge networks
-```
-
-With `trustedIPs` set, Traefik strips any client-supplied `X-Forwarded-For` headers and replaces them with the real connecting IP before the forwardAuth hop to nginx. Without it, a blocked IP can bypass the blocklist by prepending any address to its XFF header.
-
----
+The native root helper accepts a restricted rule grammar before installing an
+nginx include. Docker examples share a rules volume and restart the configured
+nginx containers. A generated file alone does not enforce blocking: nginx must
+include it and use `$blocked_source` in a request-handling rule.
+
+The checker examples expose `/check_ip` for a proxy's forward-auth request.
+The reverse-proxy examples enforce the rules directly before proxying to an app.
+An empty User-Agent is a separate blocking rule in the examples; remove it if
+that policy does not suit your traffic.
+
+## Deployment boundaries
+
+- The native downloader and software updater run as `etr`. The separately
+  installed root helper is not self-updated. Choose automatic application,
+  an operator-owned root cron schedule, or generation without a helper.
+- Docker socket access gives the generator authority over a rootful Docker
+  host even though its container runs as nonroot. To avoid that authority,
+  remove the socket mount and group grant, set `RESTART_CONTAINERS=false`, and
+  provide a separately controlled apply/reload workflow.
+- Trust only your actual proxies when accepting forwarded client IPs.
+- Release signatures authenticate the publisher; they do not prove that code
+  or blocking decisions are safe. See the [security review](security-review.md)
+  for open findings and validation limits.
 
 ## Examples
 
-Alternative configurations for setups that don't use Traefik:
+| Proxy or deployment | Example |
+| --- | --- |
+| Basic generator and nginx | [docker-compose.example.yml](docker-compose.example.yml) |
+| Traefik v2 | [examples/traefik-v2](examples/traefik-v2/) |
+| Traefik v3 | [examples/traefik-v3](examples/traefik-v3/) |
+| Caddy | [examples/caddy](examples/caddy/) |
+| nginx reverse proxy | [examples/nginx-reverse-proxy](examples/nginx-reverse-proxy/) |
+| pfSense HAProxy | [examples/pfsense](examples/pfsense/README.md) |
 
-| Example | Description |
-|---|---|
-| [`examples/traefik-v2/`](examples/traefik-v2/) | Traefik v2 with `forwardAuth` to the nginx checker |
-| [`examples/traefik-v3/`](examples/traefik-v3/) | Traefik v3 — same pattern; notes HTTP/3 opt-in and API changes |
-| [`examples/caddy/`](examples/caddy/) | Caddy `forward_auth` to the nginx checker (Caddy sends identical `X-Forwarded-*` headers) |
-| [`examples/nginx-reverse-proxy/`](examples/nginx-reverse-proxy/) | nginx is both edge proxy and blocker — geo check inline before `proxy_pass`, no separate forwardAuth hop |
-| [`examples/pfsense/`](examples/pfsense/) | pfSense HAProxy as edge → nginx inline blocking → app; includes HAProxy configuration steps |
+Read the [example setup notes](examples/README.md) before copying a deployment.
+Images are published at [Docker Hub](https://hub.docker.com/r/mxmd/etr).
+The `v3` tag can move on development builds; use a reviewed version or digest
+for a controlled rollout.
 
----
+<!-- Keep these headings as destinations for existing documentation links. -->
+## Quick Start
 
-## Related Docs
+Use the [Docker quick start](docs/docker.md#quick-start) or
+[native installer](native-install.md#1-install-or-upgrade).
 
-- [reporting.md](reporting.md) — Query and analyze blocked request logs with `jq`
-- [testing.md](testing.md) — Manually test the blocklist and nginx behavior locally
-- [native-install.md](native-install.md) — Native install on Ubuntu (incl. ServerPilot) and RHEL 8–10: unprivileged daemon, root `etr-apply` validator, SELinux/AppArmor policies, signed self-updates
-- [releasing.md](releasing.md) — Cut signed `v3.x.y` releases and manage the signing key
+## Configuration (`config.json`)
 
----
+See the [JSON field reference](docs/configuration.md#json-fields).
+
+## Whitelisting
+
+See [feed parsing and whitelists](docs/configuration.md#feed-parsing-and-whitelists).
+
+## Notifications
+
+See [notification channels](docs/configuration.md#notification-channels).
+
+## Environment Variables
+
+See [scheduling and application](docs/configuration.md#scheduling-and-application)
+and [native software checks](native-install.md#6-software-release-checks-and-opt-in-updates).
+
+## Docker Compose
+
+See [Docker setup](docs/docker.md) and the [example index](examples/README.md).
+
+## Nginx Configuration (`nginx/default.conf`)
+
+See [nginx integration](docs/nginx.md).
+
+### Real IP trust
+
+See [trusted proxies and client addresses](docs/nginx.md#real-ip-trust).
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](./LICENSE).
+[MIT](LICENSE).

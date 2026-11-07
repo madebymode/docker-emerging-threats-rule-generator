@@ -4,8 +4,8 @@ services:
   emerging-threats-rules:
     environment:
       # Set RESTART_CONTAINERS=false to disable Docker socket usage.
-      # When false, the container only writes blocklist.conf and exits without
-      # restarting any containers. The docker.sock volume mount can be removed.
+      # When false, the daemon keeps refreshing blocklist.conf without
+      # restarting containers. Remove the docker.sock mount in that mode.
       # Use your orchestrator's reload hook to apply the updated file.
       - RESTART_CONTAINERS=true
     # Match the docker group on the host: grep docker /etc/group | cut -d: -f3

@@ -1,5 +1,7 @@
 # pfSense HAProxy Example
 
+[Example index](../README.md) · [nginx integration](../../docs/nginx.md)
+
 Traffic flow:
 
 ```
@@ -24,7 +26,8 @@ grep docker /etc/group | cut -d: -f3
 #    - Update set_real_ip_from to your pfSense LAN interface IP
 #    - Update the upstream block to point at your application
 
-# 4. Bring it up
+# 4. Generate initial rules before starting nginx; see the example index.
+# Then start the deployment.
 docker compose up -d
 ```
 
@@ -59,10 +62,15 @@ Install the HAProxy package if not already present:
 Enabling **Forwardfor** makes HAProxy insert `X-Forwarded-For: <client-ip>`
 so nginx can resolve `$remote_addr` to the real client instead of pfSense.
 
-> **Spoofing hardening:** also enable **"Forwardfor except"** and set it to
-> pfSense's WAN interface IP. This causes HAProxy to *replace* any existing
-> `X-Forwarded-For` header rather than append to it, preventing clients from
-> injecting a forged XFF chain to bypass the blocklist.
+For an internet-facing HAProxy edge with no trusted upstream proxy, replace
+client-supplied forwarding headers with the connection source address. HAProxy
+supports `http-request set-header X-Forwarded-For %[src]`; configure the equivalent
+rule in your pfSense HAProxy setup and inspect the generated configuration.
+`forwardfor except` skips header insertion for a source network; it does not
+replace an existing header. See the [HAProxy header rewrite guide](https://cdn.haproxy.com/documentation/haproxy-configuration-tutorials/proxying-essentials/http-rewrites/).
+
+If a CDN or another proxy precedes HAProxy, define that trust boundary separately
+before choosing the client address. Do not accept arbitrary public XFF values.
 
 ### Frontend
 
@@ -89,14 +97,15 @@ Click **Save**, then **Services > HAProxy > Apply Changes**.
 After bringing up both sides, check that nginx sees the client IP (not pfSense):
 
 ```bash
-# From a machine behind pfSense, curl the docker host directly:
-curl -v http://192.168.1.50:8080/
+# Send the request through the configured HAProxy frontend, not directly to nginx:
+curl -v https://your-frontend.example/
 
 # Check nginx logs — $remote_addr should be your client IP, not 192.168.1.1
 docker compose logs nginx
 ```
 
 If `$remote_addr` still shows pfSense's IP, confirm that:
+
 1. HAProxy's Forwardfor option is enabled and saved.
 2. `set_real_ip_from` in `nginx/default.conf` matches your pfSense LAN IP.
 3. The nginx container was restarted after the config change.

@@ -94,8 +94,8 @@ func reloadNginx(config *Config) error {
 
 // restartNginxContainers restarts specified Docker containers.
 // Container names are validated before use and each Docker API call has a hard timeout.
-// ContainerRestart is used as a single atomic call so the container is never left stopped
-// if the start phase fails.
+// ContainerRestart requests stop/start through one API call. Success does not
+// prove that nginx remains healthy after startup.
 func restartNginxContainers(cli *client.Client, containerNames []string) error {
 	for _, containerName := range containerNames {
 		if err := validateContainerName(containerName); err != nil {

@@ -26,31 +26,20 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build
-        run: go build -v ./...
+      - name: Build both variants
+        run: make build
 
-      - name: Test
-        run: |
-          go test ./...
-          go test -tags native ./...
-          go test -race -short ./...
-          go test -tags native -race -short ./...
-
-      - name: Vet
-        run: |
-          go vet ./...
-          go vet -tags native ./...
+      - name: Format, test, vet, and race checks
+        run: make check race
 
       - name: Lint shell scripts
         run: shellcheck -S warning deploy/install.sh scripts/*.sh
 
       - name: Test native installer upgrades
-        run: bash tests/native-install.sh
+        run: make installer-test
 
       - name: Build and smoke-test Docker image
-        run: |
-          docker build --pull -t etr:hardening-test .
-          sh tests/docker-smoke.sh etr:hardening-test
+        run: make docker-smoke IMAGE=etr:hardening-test
 
   policies:
     runs-on: ubuntu-latest

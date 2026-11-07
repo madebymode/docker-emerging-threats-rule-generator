@@ -15,10 +15,9 @@ import (
 // but the reload step is skipped — the caller is expected to reload nginx
 // out-of-band. Rollback still triggers on write or validation failure.
 //
-// Failure path invariant: after this function returns error, the on-disk
-// blocklist file is EITHER (a) the previously-written valid file, or (b)
-// removed entirely if none existed before. It is never a half-written or
-// syntactically invalid file.
+// When restoration succeeds, the generated file is replaced with its snapshot
+// (or removed if no snapshot existed). Restoration can itself fail; callers
+// must surface that error instead of assuming the old state was recovered.
 func applyBlocklist(whitelist map[string]string, blocklist map[string][]string, config *Config, reload bool) error {
 	backup, hadBackup, err := snapshotBlocklist(config.ConfFilePath)
 	if err != nil {

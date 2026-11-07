@@ -3,6 +3,9 @@
 # `release-signing` GitHub environment, and adds the public half to
 # release-signing.pub (newest first). The private key never touches the repo.
 #
+# Existing installations need a bridge release before key rotation; see
+# releasing.md. This script changes the signer immediately.
+#
 # Usage: scripts/new-release-key.sh BACKUP_PATH
 #   BACKUP_PATH  where to write an offline copy of the private key (e.g. an
 #                encrypted volume). Store it in your password manager, then

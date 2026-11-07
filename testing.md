@@ -1,119 +1,88 @@
-# Testing the Nginx Blocklist Locally
+# Verify nginx blocking on a test deployment
 
-This document covers how to manually test the nginx blocklist behavior without a Traefik/forward auth setup in front of it.
+[Documentation index](readme.md) · [Automated checks](CONTRIBUTING.md) · [nginx integration](docs/nginx.md)
 
-## Prerequisites
+Use a disposable deployment for these tests. They exercise the forward-auth
+checker at `/check_ip`; inline reverse-proxy examples need requests to the
+application route instead. For native installation checks, use
+[native verification](native-install.md#5-verify).
 
-The `emerging-threats-rules` service must have run at least once so `blocklist.conf` is written to the shared volume before nginx starts.
+## Prepare the fixture
+
+Create a working Docker deployment with the
+[first-run sequence](docs/docker.md#quick-start). For predictable results, add
+`192.0.2.42` to `local_blocklist` in the test `config.json`, ensure it is not
+whitelisted, and run a refresh. Do not depend on a live threat feed continuing
+to contain a particular address.
+
+The commands below assume the basic example from the repository root:
 
 ```bash
-docker compose up emerging-threats-rules
-docker compose up nginx-blacklist
+export COMPOSE_FILE=docker-compose.example.yml
+docker compose exec emerging-threats-rules /usr/local/bin/nginx_blacklist --force
+docker compose exec nginx-blacklist sh
 ```
 
-## Exec Into the Container
+Only nginx has a shell. The ETR generator image is `scratch`; invoke its binary
+directly. If using another example, substitute its service names.
+
+## Normal request and empty User-Agent
+
+Inside the nginx container:
 
 ```bash
-docker exec -it <nginx-container-name> sh
-```
+# Expect 200 if loopback is not blocked and the User-Agent is present.
+wget -S -O - -U ETR-test http://localhost:8080/check_ip
 
-From inside the container you can hit `localhost:8080` directly — no port mapping needed.
-
----
-
-## Note: Trusting the Proxy for Forwarded Headers
-
-By default, `set_real_ip_from` trusts the private Docker network ranges listed in `nginx/default.conf`. When making requests from inside the container, the connecting IP is `127.0.0.1` — which is not in that range — so nginx ignores the XFF header and `$remote_addr` stays as `127.0.0.1`.
-
-To test blocked IPs using `X-Forwarded-For`, temporarily add
-`set_real_ip_from 127.0.0.1;` to the host's `nginx/default.conf` and recreate nginx:
-
-```bash
-docker compose up -d --force-recreate nginx-blacklist
-```
-
-The nginx configuration is mounted read-only, so edit it on the host. Remove the
-localhost trust rule and recreate nginx again when testing is complete.
-
----
-
-## Basic Tests
-
-**Allowed request (expect 200):**
-```bash
-wget -S -O - http://localhost:8080/check_ip
-```
-
-**Empty User-Agent — triggers `$blocked_ua` (expect 403):**
-```bash
+# Expect 403 from the example's independent empty-User-Agent rule.
 wget -S -O - -U "" http://localhost:8080/check_ip
 ```
 
----
+## Test a forwarded client address
 
-## Testing With Full Log Context
-
-The nginx log format uses Traefik-forwarded headers to reconstruct the original client URL. Set them to get meaningful log output:
+Loopback is not in the default trusted proxy ranges, so nginx normally ignores
+`X-Forwarded-For` sent from an in-container request. For this disposable test,
+add `set_real_ip_from 127.0.0.1;` at `http` level in the host's
+`nginx/default.conf`, then recreate nginx from the host:
 
 ```bash
-wget -S -O - -U "" \
-  --header "X-Forwarded-Method: GET" \
-  --header "X-Forwarded-Proto: https" \
-  --header "X-Forwarded-Host: myapp.example.com" \
-  --header "X-Forwarded-Uri: /admin/login" \
-  http://localhost:8080/check_ip
+docker compose up -d --force-recreate nginx-blacklist
+docker compose exec nginx-blacklist sh
 ```
 
-Expected log line:
-```json
-{"ip":"127.0.0.1","time":"2026-03-14T12:00:00+00:00","method":"GET","url":"https://myapp.example.com/admin/login","status":403,"blocked_source":"","blocked_ua":"empty-ua"}
-```
-
-> Only non-200 responses are logged (controlled by the `$loggable` map in `default.conf`).
-
----
-
-## Testing IP Blocking
-
-After applying the localhost trust patch above, spoof a blocked IP via `X-Forwarded-For`:
+Inside nginx, send a normal User-Agent and the fixture address:
 
 ```bash
 wget -S -O - \
-  --header "X-Forwarded-For: 1.2.3.4" \
-  --header "X-Forwarded-Method: GET" \
-  --header "X-Forwarded-Proto: https" \
-  --header "X-Forwarded-Host: myapp.example.com" \
-  --header "X-Forwarded-Uri: /secret" \
+  --header="X-Forwarded-For: 192.0.2.42" \
+  --header="X-Forwarded-Method: GET" \
+  --header="X-Forwarded-Proto: https" \
+  --header="X-Forwarded-Host: test.example" \
+  --header="X-Forwarded-Uri: /fixture" \
   http://localhost:8080/check_ip
 ```
 
-Expected log line (if `1.2.3.4` is in the blocklist):
-```json
-{"ip":"1.2.3.4","time":"2026-03-14T12:00:00+00:00","method":"GET","url":"https://myapp.example.com/secret","status":403,"blocked_source":"<blocklist-label>","blocked_ua":""}
-```
+Expect 403 and an IP block label in the log. Remove the temporary loopback trust
+rule and recreate nginx when finished. Config files are mounted read-only in
+nginx; make edits on the host.
 
-**Verify an IP is in the generated blocklist:**
+## Check logs and the real proxy route
+
+From the host:
+
 ```bash
-grep "1.2.3.4" /etc/nginx/conf.d/blocklist.conf
+docker compose logs --no-log-prefix -f nginx-blacklist
 ```
 
----
+Check `ip`, `status`, `blocked_source`, and `blocked_ua`. Both reason fields can
+be populated when a blocked address also sends an empty User-Agent. The default
+configuration logs 403s, not successful requests.
 
-## Watching Logs Live
+Finally send requests through your actual edge proxy and verify the logged
+client address. Local spoofing tests prove the checker reads a trusted header;
+they do not prove the edge discards untrusted headers. Review the
+[proxy trust boundary](docs/nginx.md#real-ip-trust).
 
-From outside the container:
-```bash
-docker logs -f <nginx-container-name>
-```
-
----
-
-## How the Block Logic Works
-
-| Condition | Variable | Response |
-|---|---|---|
-| Empty `User-Agent` header | `$blocked_ua = "empty-ua"` | 403 |
-| IP matched in `blocklist.conf` geo block | `$blocked_source = "<label>"` | 403 |
-| Neither | both empty/falsy | 200 OK |
-
-The `blocked_source` field contains the blocklist label (e.g. `ipsum-4`) and `blocked_ua` contains `empty-ua` when the User-Agent was missing. Only one will be non-empty per request — empty UA is checked first.
+For automated, network-isolated fixtures, run `make docker-smoke`. See
+[Contributing](CONTRIBUTING.md#build-and-integration-checks) for the rest of the
+validation workflow.

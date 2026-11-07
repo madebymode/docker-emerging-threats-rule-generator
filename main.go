@@ -4,10 +4,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 )
@@ -128,105 +126,4 @@ func main() {
 
 		_ = runUpdate(config, notifiers, subjectPrefix)
 	}
-}
-
-// computeNextRun returns the next scheduled update time in local time.
-// Default: 03:00 local with up to 60 minutes of jitter to spread load across
-// deployments that pull from the same upstream blocklist sources.
-func computeNextRun() time.Time {
-	hour := envInt("ETR_AT_HOUR", 3, 0, 23)
-	jitterMax := envInt("ETR_JITTER_MINUTES", 60, 0, 240)
-
-	now := time.Now()
-	next := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, now.Location())
-	if !next.After(now) {
-		next = next.Add(24 * time.Hour)
-	}
-	if jitterMax > 0 {
-		next = next.Add(time.Duration(rand.IntN(jitterMax*60)) * time.Second)
-	}
-	return next
-}
-
-func envInt(key string, def, min, max int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < min || n > max {
-		logf("Invalid %s=%q (must be int in [%d,%d]), using default %d\n", key, v, min, max, def)
-		return def
-	}
-	return n
-}
-
-// runUpdate performs one full download → generate → apply cycle. Returns nil on
-// success; on failure logs and notifies, and (in daemon mode) leaves the daemon
-// running so the next scheduled window can retry.
-func runUpdate(config *Config, notifiers []Notifier, subjectPrefix string) error {
-	failureThreshold := envInt("BLOCKLIST_FAILURE_THRESHOLD", 30, 0, 100)
-
-	whitelist := make(map[string]string)
-	for _, address := range config.LocalWhitelist {
-		whitelist[address] = "local_whitelist"
-	}
-	for _, url := range config.RemoteWhitelists {
-		content, err := downloadFile(url)
-		if err != nil {
-			logf("Failed to download file from %s: %v\n", redactURL(url), err)
-			continue
-		}
-		addresses := parseIPAddresses(content)
-		logf("Whitelist source %s: %d entries\n", redactURL(url), len(addresses))
-		for address := range addresses {
-			whitelist[address] = url
-		}
-	}
-
-	blocklist := make(map[string][]string)
-	for _, address := range config.LocalBlocklist {
-		blocklist[address] = append(blocklist[address], "local_blocklist")
-	}
-
-	remoteBlocklistFailures := 0
-	for _, url := range config.RemoteBlocklists {
-		content, err := downloadFile(url)
-		if err != nil {
-			logf("Failed to download file from %s: %v\n", redactURL(url), err)
-			remoteBlocklistFailures++
-			continue
-		}
-		addresses := parseIPAddresses(content)
-		logf("Blocklist source %s: %d entries\n", redactURL(url), len(addresses))
-		for address := range addresses {
-			blocklist[address] = append(blocklist[address], url)
-		}
-	}
-	logf("Collected %d unique whitelist and %d unique blocklist entries (%d/%d remote blocklists fetched)\n",
-		len(whitelist), len(blocklist),
-		len(config.RemoteBlocklists)-remoteBlocklistFailures, len(config.RemoteBlocklists))
-
-	if len(config.RemoteBlocklists) > 0 {
-		failurePct := remoteBlocklistFailures * 100 / len(config.RemoteBlocklists)
-		if failurePct >= failureThreshold {
-			msg := fmt.Sprintf(
-				"%d/%d remote blocklist source(s) failed (%d%% >= threshold %d%%); preserving existing blocklist.",
-				remoteBlocklistFailures, len(config.RemoteBlocklists), failurePct, failureThreshold,
-			)
-			logf("%s\n", msg)
-			notify(notifiers, subjectPrefix+"Blocklist update abandoned", msg)
-			return fmt.Errorf("%s", msg)
-		}
-	}
-
-	reload := shouldReloadNginx()
-	if err := applyBlocklist(whitelist, blocklist, config, reload); err != nil {
-		logf("%v\n", err)
-		notify(notifiers, subjectPrefix+"Blocklist apply failed", err.Error())
-		return err
-	}
-
-	logBlocklistSuccess(config, reload)
-	return nil
 }

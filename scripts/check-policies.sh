@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the SELinux module against RHEL 8/9/10 policy and parses the AppArmor
-# profiles with each supported Ubuntu's parser, in containers. This proves the
-# policies load; scripts/vm-check.sh proves they allow what ETR needs.
+# profiles with each supported Ubuntu's parser, in containers. This checks
+# syntax/linking; scripts/vm-check.sh exercises permissions on a live test host.
 #
 # Usage: scripts/check-policies.sh [OUT_DIR]
 #   OUT_DIR  where to write etr-selinux-el{8,9,10}.pp (default: dist/)

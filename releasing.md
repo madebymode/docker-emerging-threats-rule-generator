@@ -1,5 +1,7 @@
 # Releasing
 
+[Documentation index](readme.md) · [Contributing](CONTRIBUTING.md)
+
 There are two kinds of release:
 
 | | Trigger | GitHub release | Docker tags | Installed by native hosts |
@@ -119,11 +121,27 @@ cause was transient.
 
 ## Rotating the key
 
-Run the script again. It puts the new public key first in
-`release-signing.pub` and replaces the environment secret. Release once with
-both keys present, so hosts receive binaries that trust the new key. Then
-remove the old key in a later release.
+Existing hosts must learn a new public key before releases are signed with it.
+The current `scripts/new-release-key.sh` immediately changes the signing secret;
+use it for initial setup, not as a complete rotation procedure.
 
-If the private key is compromised, remove its line from `release-signing.pub`
-and release immediately. Hosts on older binaries still trust the old key until
-they update, so also pin them (`ETR_UPDATE_PIN`) or update them manually.
+For planned rotation:
+
+1. Generate and back up the new private key securely. Append its public key to
+   `release-signing.pub`, leaving the old key first and the signing secret
+   unchanged. The workflow verifies signatures against the first public key.
+2. Publish a bridge release signed with the old key and containing both public
+   keys. Deploy that release to the managed fleet before changing the signer.
+3. Move the new public key to the first position and replace the signing secret
+   with the new private key. Publish the next release signed with the new key.
+4. Remove the old public key in a later release after completing the migration.
+
+Hosts that missed the bridge release cannot authenticate a release signed only
+with the new key. Recover those hosts through an administrator-controlled install
+with an independently verified key. Do not assume the updater can skip directly
+to the newest release across a trust-key change.
+
+If a private key is compromised, stop automatic installation and use an
+independently verified recovery path. Pinning a version alone does not revoke a
+compromised key. Coordinate key replacement and host recovery before resuming
+updates; do not rely on an old-key-signed bridge as proof of trust.

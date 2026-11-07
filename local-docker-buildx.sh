@@ -1,4 +1,7 @@
 #!/bin/bash
+# Legacy manual publication tool: pushes mxmd/etr:v3, changes Docker contexts,
+# and removes non-default builders. Do not use for local test builds.
+# Prefer make docker-smoke for development and releasing.md for publication.
 
 FORCE_BUILD=false
 

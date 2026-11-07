@@ -1,5 +1,7 @@
 # Log Reporting with jq
 
+[Documentation index](readme.md) · [nginx integration](docs/nginx.md)
+
 Logs are emitted as newline-delimited JSON. All queries below parse the log stream with this base pattern:
 
 ```bash
@@ -10,10 +12,15 @@ jq -Rn '[inputs | try fromjson | select(type == "object")]'
 
 ## Getting Logs
 
-Blocked requests are written to two places:
+The default Docker nginx configuration writes blocked-request JSON to stdout.
+The Docker logging driver handles its retention. ETR's own operational logs are
+separate text records; native services send those records to journald.
 
-- **Docker stdout** — captured by the Docker logging driver. Use `docker logs` to read it.
-- **`/var/log/nginx/blocklist.log`** — persisted to the `nginx-logs` shared volume and rotated daily by the `log-manager` service. Useful for offline analysis across restarts or longer time windows.
+File logs are optional. If you configure nginx to write
+`/var/log/blocklist/blocklist.log` on the `blocklist-logs` volume, the optional
+`log-manager` service rotates that file. Mounting the volume alone does not
+create file logging. Native request logging must also be configured explicitly;
+see [native logging](native-install.md#4-enforcement-and-block-logging).
 
 **Single container (stdout):**
 ```bash
@@ -27,7 +34,7 @@ docker compose logs nginx-blacklist --no-log-prefix 2>&1
 
 **From the persisted log file:**
 ```bash
-docker exec nginx-blacklist cat /var/log/nginx/blocklist.log
+docker exec nginx-blacklist cat /var/log/blocklist/blocklist.log
 ```
 
 All query examples below use `docker logs <container>` — substitute the log file path for offline analysis against the rotated file.
@@ -39,24 +46,13 @@ All query examples below use `docker logs <container>` — substitute the log fi
 To watch blocked requests in real time, use `jq -R --unbuffered` (processes one line as it arrives instead of
 buffering the whole stream).
 
-Docker Compose adds a `service-name | ` prefix to every log line. Strip it with `awk '{print $NF}'` before piping to
-`jq`. `stdbuf -oL` forces line-buffered output so nothing sits in awk's buffer:
-
-```bash
-docker-compose -f /path/to/docker-compose.yml logs etr-blocker-nginx -f 2>&1 \
-  | stdbuf -oL awk '{print $NF}' \
-  | jq -R --unbuffered 'try fromjson | select(type == "object")'
-```
-
-Or with Compose v2's `--no-log-prefix` flag (skips the awk step):
+Use Compose v2's `--no-log-prefix` so the JSON remains intact. Do not strip
+prefixes with `awk '{print $NF}'`: that loses data when JSON values contain spaces.
 
 ```bash
 docker compose logs etr-blocker-nginx --no-log-prefix -f 2>&1 \
   | jq -R --unbuffered 'try fromjson | select(type == "object")'
 ```
-
-> `--no-log-prefix` is a Compose v2 flag and may not be available in all CI environments or older installs. The
-> `stdbuf -oL awk '{print $NF}'` approach works universally.
 
 Each blocked request prints as it happens:
 
@@ -179,10 +175,10 @@ Capture logs to a file first when running multiple queries against the same wind
 docker logs <container> 2>&1 | jq -Rc 'try fromjson | select(type == "object")' > blocked.json
 ```
 
-Or read directly from the persisted log volume (no container restart needed):
+If file logging is configured, read from its volume (no restart needed):
 
 ```bash
-docker exec nginx-blacklist cat /var/log/nginx/blocklist.log \
+docker exec nginx-blacklist cat /var/log/blocklist/blocklist.log \
   | jq -Rc 'try fromjson | select(type == "object")' > blocked.json
 ```
 

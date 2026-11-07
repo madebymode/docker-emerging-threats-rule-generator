@@ -1,5 +1,12 @@
 # Native Install (no Docker)
 
+[Documentation index](readme.md) · [Configuration reference](docs/configuration.md)
+
+Jump to: [install/upgrade](#1-install-or-upgrade) · [configuration](#2-configuration) ·
+[nginx placement](#3-nginx-placement) · [enforcement/logging](#4-enforcement-and-block-logging) ·
+[verification](#5-verify) · [software checks](#6-software-release-checks-and-opt-in-updates) ·
+[troubleshooting](#troubleshooting)
+
 The native build runs ETR directly on an nginx host under systemd. It is split
 so that downloaded generator/updater code runs as the unprivileged `etr` user.
 Nginx application is separately controlled by the root operator:
@@ -177,11 +184,11 @@ this migration, because the old daemon's update unit runs as root; run
 ## 2. Configuration
 
 `/etc/etr/config.json` (root:etr, 0640) takes the same keys as the Docker
-setup (see the [Configuration table](readme.md#configuration-configjson)),
+setup (see the [Configuration table](docs/configuration.md#json-fields)),
 except:
 
 - `nginx_conf_file_path` must be `/var/lib/etr/blocklist.conf`: the daemon
-  can write nowhere else. In `cron` and `generator` modes, staging succeeds
+  stages generated output within that directory. In `cron` and `generator` modes, staging succeeds
   without waiting for a root service; validation and live-file rollback happen
   in the separately scheduled root workflow.
 - `nginx_container_names` and `nginx_service_name` are ignored; nginx is set
@@ -208,11 +215,11 @@ Optional daemon settings go in `/etc/etr/etr.env` (root, 0600; systemd reads
 it before dropping privileges): `INSTANCE_NAME`, `ETR_AT_HOUR`,
 `ETR_JITTER_MINUTES`, `BLOCKLIST_FAILURE_THRESHOLD`, `ETR_APPLY_TIMEOUT`
 (seconds to wait for `etr-apply`, default 120), notifier credentials (see
-[Environment Variables](readme.md#environment-variables)), and `HTTPS_PROXY` /
+[Environment Variables](docs/configuration.md#scheduling-and-application)), and `HTTPS_PROXY` /
 `NO_PROXY`.
 
-ETR makes only outbound HTTPS requests (and SMTP, if configured). It opens no
-ports. On RHEL, SELinux allows HTTP/HTTPS, proxy and SMTP ports; for a webhook
+ETR makes outbound connections for feeds, release checks, and configured
+notification endpoints (HTTP(S) or SMTP). It does not listen on network ports. On RHEL, SELinux allows HTTP/HTTPS, proxy and SMTP ports; for a webhook
 or proxy on another port, run `setsebool -P etr_connect_any on`.
 
 ## 3. nginx placement
@@ -346,7 +353,7 @@ real_ip_recursive   on;
 set_real_ip_from    10.0.0.0/8;   # your LB / CDN ranges only
 ```
 
-See [Real IP trust](readme.md#real-ip-trust) for why `real_ip_recursive on`
+See [Real IP trust](docs/nginx.md#real-ip-trust) for why `real_ip_recursive on`
 matters.
 
 ---

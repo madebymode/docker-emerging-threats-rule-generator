@@ -1,5 +1,7 @@
 # ETR project review — 2026-11-07
 
+[Documentation index](readme.md) · [Contributing](CONTRIBUTING.md)
+
 This review covers the working tree, including the native installation and
 apply-mode changes. It is a source review with local tests, not a penetration
 test or a guarantee that no vulnerabilities exist. Nothing was published or
@@ -107,14 +109,15 @@ directly in a privileged nginx instance.
    narrow these to actual trusted proxies and isolate the check endpoint.
    A peer within a trusted range can otherwise supply a forged client address.
 
-8. **Release trust and key rotation need an operational procedure.** Bootstrap
+8. **Release trust and fleet key rotation remain operator responsibilities.** Bootstrap
    fetches the installer and public key from the same repository used for
    releases; it cannot independently protect against compromise of that
    initial trust source. Self-update instead uses embedded trusted keys.
    `scripts/new-release-key.sh` immediately changes the signing secret, while
    existing binaries do not yet trust the new key. Planned rotation needs an
    old-key-signed bridge release carrying the new public key before signing
-   switches; compromise recovery needs a separate administrator action.
+   switches; see the [rotation procedure](releasing.md#rotating-the-key).
+   Compromise recovery needs a separate administrator action.
 
 ## Logging and coverage
 

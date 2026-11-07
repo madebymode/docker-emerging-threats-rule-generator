@@ -3,7 +3,7 @@
 set -eu
 image=${1:-etr:hardening-test}
 
-# Shipped image is FROM scratch: no shell for attackers or CVE scanners.
+# The shipped scratch image must not include a shell.
 if docker run --rm --network none --entrypoint /bin/sh "$image" -c true 2>/dev/null; then
     echo 'FAIL: image contains /bin/sh'; exit 1
 fi

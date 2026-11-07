@@ -5,9 +5,10 @@ version: '3'
 #
 # Usage:
 #   1. Copy config.example.json → config.json and set nginx_container_names: ["nginx-blacklist"]
-#   2. Download nginx/default.conf (see README Quick Start step 2)
+#   2. Keep nginx/default.conf alongside this file (see docs/docker.md)
 #   3. Set group_add to the host docker GID: grep docker /etc/group | cut -d: -f3
-#   4. docker compose up -d emerging-threats-rules nginx-blacklist log-manager
+#   4. Generate the initial list, then start nginx and the daemon (docs/docker.md)
+#   log-manager is optional and requires nginx file logging to be configured.
 #
 # For Traefik integration see examples/traefik-v3/docker-compose.yml
 
