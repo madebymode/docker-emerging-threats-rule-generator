@@ -1,40 +1,88 @@
 # Releasing
 
-Every push to `master` publishes the Docker image and a timestamped release
-(`v3-YYYY-MM-DD-HHMMSS`). Native hosts never install those automatically.
+There are two kinds of release:
 
-Native self-update (`etr-update.timer`) installs only **signed `v3.MINOR.PATCH`
-releases**. Pushing such a tag runs the `sign-release` job, which:
+| | Trigger | GitHub release | Docker tags | Installed by native hosts |
+|---|---|---|---|---|
+| **Development build** | every push to `master` | `v3-YYYY-MM-DD-HHMMSS`, unsigned | `v3`, `master`, `v3-YYYY-MM-DD-HHMMSS` | never |
+| **Signed release** | pushing a `v3.MINOR.PATCH` tag | `v3.MINOR.PATCH`, signed | `3.MINOR.PATCH`, `v3.MINOR.PATCH`, `v3` | yes, by `etr-update.timer` |
 
-1. builds both binaries with the tag compiled in (`etr-linux --version`) and
-   records GitHub build provenance for them;
-2. waits for approval in the `release-signing` environment;
-3. writes `manifest.json` (tag, time, SHA-256 of each binary), signs it with
-   Ed25519, and checks the signature against `release-signing.pub`;
-4. creates a draft release, attaches the binaries, manifest and signature,
-   then publishes it.
+## Cutting a signed release
 
-The manifest covers the daemon (`etr-linux-*`), the root installer
-(`etr-apply-linux-*`) and `etr-deploy.tar.gz` (units, AppArmor profiles,
-SELinux modules for EL8/9/10 built by the `policies` job, and `install.sh`).
-Self-update replaces only the daemon. If a release changes `etr-apply`, a
-unit or a policy, say so in the release notes: hosts pick those up only when
-someone reruns `install.sh`.
+1. **Pick the version.** Follow [Semantic Versioning](https://semver.org/):
+   bump the patch (`v3.0.0` → `v3.0.1`) for fixes, the minor (`v3.0.1` →
+   `v3.1.0`) for new features or config options. It must match
+   `v3.MINOR.PATCH` exactly; the job refuses anything else (no `-rc1`), and
+   hosts only install v3 releases. List existing ones with
+   `git tag -l 'v3.*' --sort=-v:refname`.
 
-Hosts install a release once it is older than `ETR_UPDATE_DELAY_HOURS`
-(default 72), counted from the signed manifest time. If a release is bad,
-delete it inside that window and no host will have installed it.
+2. **Check `master` is green.** The tag builds whatever commit it points to,
+   so tag a commit whose `Go` and `Build and Release` runs passed:
 
-```bash
-git tag v3.2.0 && git push origin v3.2.0
-# approve the sign-release job in the Actions tab
-```
+   ```bash
+   git switch master && git pull --ff-only
+   gh run list --branch master -L 4
+   ```
 
-Anyone can check a binary's provenance:
+3. **Tag and push.**
 
-```bash
-gh attestation verify etr-linux-amd64 -R madebymode/docker-emerging-threats-rule-generator
-```
+   ```bash
+   git tag -a v3.1.0 -m "v3.1.0"
+   git push origin v3.1.0
+   ```
+
+   This starts **Build and Release Cross-Platform** on the tag. It runs the
+   tests, pushes the Docker image, builds the native binaries with the tag
+   compiled in (`etr-linux --version`) and records GitHub build provenance
+   for them. Follow it with `gh run watch` or in the Actions tab.
+
+4. **Approve signing.** After a few minutes the `sign-release` job waits for a
+   reviewer of the `release-signing` environment. Open the run
+   (`gh run view --web`), click **Review deployments**, tick
+   `release-signing` and **Approve and deploy**. The job then:
+   - bundles `deploy/` and the SELinux modules into `etr-deploy.tar.gz`;
+   - writes `manifest.json` (tag, time, SHA-256 of every binary and the
+     bundle), signs it with Ed25519 and checks the signature against
+     `release-signing.pub`;
+   - creates a draft release, attaches the binaries, `etr-deploy.tar.gz`,
+     `manifest.json` and `manifest.json.sig`, then publishes it.
+
+   Rejecting it publishes no GitHub release, but the Docker tags from step 3
+   are already pushed.
+
+5. **Write the release notes.** The workflow's notes are generic. Edit the
+   release on GitHub to say what changed, and call out anything that needs
+   `install.sh` rerun: self-update replaces only the daemon, so changes to
+   `etr-apply`, a unit or a policy reach a host only when someone reruns
+   `install.sh`.
+
+6. **Verify it** (optional, anyone can do this):
+
+   ```bash
+   mkdir /tmp/etr-v3.1.0 && cd /tmp/etr-v3.1.0
+   gh release download v3.1.0 -R madebymode/docker-emerging-threats-rule-generator \
+     -p 'manifest.json*' -p etr-linux-amd64
+   curl -fsSLO https://raw.githubusercontent.com/madebymode/docker-emerging-threats-rule-generator/v3.1.0/release-signing.pub
+   openssl pkeyutl -verify -rawin -pubin -inkey release-signing.pub \
+     -in manifest.json -sigfile manifest.json.sig      # Signature Verified Successfully
+   sha256sum etr-linux-amd64; jq -r '.assets["etr-linux-amd64"]' manifest.json   # must match
+   gh attestation verify etr-linux-amd64 -R madebymode/docker-emerging-threats-rule-generator
+   ```
+
+## After it is published
+
+Hosts with `etr-update.timer` install a release once it is older than
+`ETR_UPDATE_DELAY_HOURS` (default 72), counted from the signed manifest time.
+New hosts, and hosts on a build older than the signing setup, need one manual
+install with `deploy/install.sh` (see [native-install.md](native-install.md)).
+
+**A bad release:** delete it inside that window and no host will have
+installed it (`gh release delete v3.1.0 --cleanup-tag`). Then fix `master`
+and release the next patch version; never reuse a version number.
+
+**A failed run:** fix the problem on `master`, then release the next patch
+version. Re-running the failed jobs from the Actions tab also works if the
+cause was transient.
 
 ## One-time setup (repository admin)
 

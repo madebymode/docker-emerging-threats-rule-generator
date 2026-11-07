@@ -18,6 +18,7 @@ jobs:
       attestations: write
     outputs:
       tag: ${{ steps.release_tag.outputs.tag }}
+      digest: ${{ steps.push.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -81,6 +82,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build and push Docker image
+        id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -257,12 +259,40 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.build.outputs.tag }}
+          DIGEST: ${{ needs.build.outputs.digest }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
+          HUB="https://hub.docker.com/r/$IMAGE_NAME"
+          cat > notes.md <<EOF
+          Signed release built from [\`${SHA::7}\`](https://github.com/$REPO/commit/$SHA).
+
+          ### Docker image
+
+          [\`$IMAGE_NAME\`]($HUB) for linux/amd64 and linux/arm64, with SBOM and build provenance.
+
+          | Tag | Points to |
+          |---|---|
+          | [\`$IMAGE_NAME:${TAG#v}\`]($HUB/tags?name=${TAG#v}) | this release |
+          | [\`$IMAGE_NAME:$TAG\`]($HUB/tags?name=$TAG) | this release |
+          | [\`$IMAGE_NAME:v3\`]($HUB/tags?name=v3) | the newest v3 build, including \`master\` builds |
+
+          \`\`\`bash
+          docker pull $IMAGE_NAME:${TAG#v}
+          docker pull $IMAGE_NAME@$DIGEST   # pinned to this exact image
+          \`\`\`
+
+          ### Native Linux binaries (Ubuntu 20.04+, RHEL 8 / 9 / 10)
+
+          - \`etr-linux-amd64\`, \`etr-linux-arm64\`: daemon, runs as the unprivileged \`etr\` user
+          - \`etr-apply-linux-amd64\`, \`etr-apply-linux-arm64\`: root installer that validates each blocklist
+          - \`etr-deploy.tar.gz\`: systemd units, AppArmor profiles, SELinux modules and \`install.sh\`
+          - \`manifest.json\`, \`manifest.json.sig\`: SHA-256 of every asset above, signed with the key in [\`release-signing.pub\`](https://github.com/$REPO/blob/$TAG/release-signing.pub)
+
+          Hosts with \`etr-update.timer\` install this release once it is \`ETR_UPDATE_DELAY_HOURS\` old (default 72). New hosts, or changes to \`etr-apply\`, units or policies: run \`deploy/install.sh\`. See [native-install.md](https://github.com/$REPO/blob/$TAG/native-install.md) and [releasing.md](https://github.com/$REPO/blob/master/releasing.md#cutting-a-signed-release) to verify a download.
+          EOF
           gh release create "$TAG" --repo "$REPO" --draft --verify-tag \
-            --title "Release $TAG" \
-            --notes "Signed native release built from $SHA. Native hosts with etr-update.timer install it after the configured waiting period. Install or upgrade with deploy/install.sh; see native-install.md. Docker images: mxmd/etr:$TAG, mxmd/etr:v3." \
+            --title "Release $TAG" --notes-file notes.md \
             etr-linux-amd64 etr-linux-arm64 etr-apply-linux-amd64 etr-apply-linux-arm64 \
             etr-deploy.tar.gz manifest.json manifest.json.sig
           gh release edit "$TAG" --repo "$REPO" --draft=false
